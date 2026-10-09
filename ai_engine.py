@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 MODEL = "gemini-3.8-flash"
 MAX_CHARS = 30000
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 5
 
 REWARD = {
     "easy": (15, 10),
@@ -121,13 +121,27 @@ def _call(prompt: str, schema=None) -> str:
             if not temporary_error or attempt == MAX_ATTEMPTS - 1:
                 break
 
-            # รอ 2 วินาที แล้ว 4 วินาที ก่อนลองอีกครั้ง
-            time.sleep(2 ** (attempt + 1))
+            # เพิ่มเวลารอทีละขั้น: 2, 4, 8, 16 วินาที
+            wait_seconds = 2 ** (attempt + 1)
+            time.sleep(wait_seconds)
 
-    raise AIError(
-        f"เรียก Gemini ไม่สำเร็จ: "
-        f"{type(last_error).__name__}: {str(last_error)[:300]}"
-    ) from last_error
+    if last_error is not None:
+        final_message = str(last_error)
+        if "503" in final_message or "UNAVAILABLE" in final_message.upper():
+            raise AIError(
+                "Gemini กำลังมีผู้ใช้งานจำนวนมาก (503 UNAVAILABLE) "
+                "ระบบลองใหม่อัตโนมัติแล้วแต่ยังไม่สำเร็จ "
+                "กรุณารอ 1-3 นาทีแล้วกดสร้างโจทย์อีกครั้ง "
+                "หากยังเกิดซ้ำ ให้ตรวจสอบสถานะบริการหรือเลือกโมเดล "
+                "Gemini รุ่นอื่นที่รองรับในโปรเจกต์ของคุณ"
+            ) from last_error
+
+        raise AIError(
+            f"เรียก Gemini ไม่สำเร็จ: "
+            f"{type(last_error).__name__}: {str(last_error)[:300]}"
+        ) from last_error
+
+    raise AIError("เรียก Gemini ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")
 
 
 def _normalize(items, focus=None):
