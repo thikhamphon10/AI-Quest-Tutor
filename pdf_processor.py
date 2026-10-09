@@ -1,20 +1,31 @@
-import re
-from pypdf import PdfReader
+import pypdf
+import io
 
-
-def clean_text(text: str) -> str:
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def extract_text(file) -> str:
+def extract_text_from_pdf(pdf_file) -> str:
+    """
+    ดึงข้อความทั้งหมดออกจากไฟล์ PDF
+    รองรับทั้งการรับไฟล์ผ่าน st.file_uploader (BytesIO) และ file path
+    """
+    text = ""
     try:
-        reader = PdfReader(file)
-        raw = "\n".join((p.extract_text() or "") for p in reader.pages)
-    except Exception:
-        raise ValueError("อ่านไฟล์ PDF ไม่ได้ ไฟล์อาจเสียหรือมีรหัสผ่าน ลองไฟล์อื่นหรือใช้ Paste Notes แทน")
-    text = clean_text(raw)
-    if len(text) < 50:
-        raise ValueError("PDF นี้ไม่มีข้อความที่อ่านได้ (อาจเป็นรูปสแกน) ระบบยังไม่รองรับ OCR ลองวางเนื้อหาแทน")
-    return text
+        # หากไฟล์ส่งมาจาก Streamlit file_uploader จะเป็น BytesIO หรือ UploadedFile
+        if hasattr(pdf_file, "read"):
+            pdf_bytes = pdf_file.read()
+            # Reset pointer ของไฟล์เพื่อความปลอดภัยหากต้องนำไปใช้อื่นๆ
+            if hasattr(pdf_file, "seek"):
+                pdf_file.seek(0)
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        else:
+            reader = pypdf.PdfReader(pdf_file)
+
+        # วนลูปอ่านข้อความจากทุกหน้า
+        for page_idx, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+            if page_text:
+                text += f"\n--- หน้า {page_idx + 1} ---\n" + page_text
+
+    except Exception as e:
+        print(f"เกิดข้อผิดพลาดในการอ่านไฟล์ PDF: {str(e)}")
+        return ""
+
+    return text.strip()
