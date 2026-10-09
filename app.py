@@ -1,346 +1,191 @@
-
-import os
-
 import streamlit as st
+from ai_engine import generate_questions_from_text, generate_questions_from_pdf
+from pdf_processor import extract_text_from_pdf
+from game_engine import GameEngine
+from games.battle import render_battle_game
 
-import ai_engine
-import pdf_processor
-from game_engine import go, init_state, new_game, topic_report
-from games import battle, speed_run, weakness
-from utils import render_topics
+# Page Configuration
+st.set_page_config(page_title="AI Quest Tutor - เกมติวแฟนตาซี", page_icon="🐾", layout="wide")
 
-
-NUM_Q = 10
-
-MODE_NAME = {
-    "battle": "⚔️ Battle Quest",
-    "speed": "⚡ Speed Run",
-    "weakness": "🔥 Weakness Training",
-}
-
-st.set_page_config(
-    page_title="AI Quest Tutor",
-    page_icon="🎮",
-    layout="centered",
-)
-
-init_state()
-s = st.session_state
-
-
-def get_api_key():
-    """อ่าน Gemini API Key จาก Environment หรือ Streamlit Secrets"""
-    key = os.getenv("GEMINI_API_KEY")
-
-    if not key:
-        try:
-            key = st.secrets.get("GEMINI_API_KEY")
-        except Exception:
-            key = None
-
-    return str(key).strip() if key else None
-
-
-def start_game(mode):
-    s.game = new_game(mode, s.questions)
-    go("game")
-
-
-def page_home():
-    st.title("🎮 AI Quest Tutor")
-    st.caption("Learn. Play. Level Up.")
-
-    api_key = get_api_key()
-
-    if not api_key:
-        st.warning(
-            "ยังไม่ได้ตั้งค่า GEMINI_API_KEY "
-            "กรุณาตั้งค่าใน Streamlit Community Cloud "
-            "ที่ Manage app > Settings > Secrets"
-        )
-    else:
-        st.success("✅ พบการตั้งค่า Gemini API Key")
-
-    if st.button(
-        "🚀 Start Quest",
-        type="primary",
-        use_container_width=True,
-    ):
-        go("material")
-
-    with st.expander("📈 My Progress", expanded=bool(s.history)):
-        c1, c2 = st.columns(2)
-        c1.metric("✨ Total XP", s.total_xp)
-        c2.metric("🔥 Best Streak", s.best_streak)
-        render_topics(topic_report(s.history))
-
-
-def page_material():
-    st.header("📚 Study Material")
-
-    tab1, tab2 = st.tabs(["📄 Upload PDF", "📝 Paste Notes"])
-
-    with tab1:
-        pdf = st.file_uploader(
-            "เลือกไฟล์ PDF",
-            type="pdf",
-        )
-
-    with tab2:
-        notes = st.text_area(
-            "วางเนื้อหาบทเรียน",
-            height=250,
-        )
-
-    st.caption("ถ้ามีทั้ง PDF และ Notes ระบบจะใช้ PDF")
-
-    if st.button(
-        "🤖 สร้างคำถามด้วย AI",
-        type="primary",
-        use_container_width=True,
-    ):
-        if not get_api_key():
-            st.error(
-                "ยังไม่พบ Gemini API Key "
-                "กรุณาตั้งค่าใน Streamlit Secrets ก่อน"
-            )
-            return
-
-        try:
-            if pdf:
-                text = pdf_processor.extract_text(pdf)
-            else:
-                text = pdf_processor.clean_text(notes)
-
-                if len(text) < 50:
-                    st.warning(
-                        "กรุณาอัปโหลด PDF "
-                        "หรือวางเนื้อหาอย่างน้อย 50 ตัวอักษร"
-                    )
-                    return
-
-            with st.spinner(
-                "🤖 AI กำลังอ่านเนื้อหาและสร้างคำถาม..."
-            ):
-                qs = ai_engine.generate_questions(text, NUM_Q)
-
-        except (ValueError, ai_engine.AIError) as e:
-            st.error(str(e))
-            return
-        except Exception as e:
-            st.error(
-                f"เกิดข้อผิดพลาด ({type(e).__name__}): {e}"
-            )
-            return
-
-        s.material = text
-        s.questions = qs
-        s.history = {}
-
-        go("mode")
-
-
-    if st.button("⬅️ กลับ"):
-        go("home")
-
-
-def page_mode():
-    st.header("🎯 เลือก Game Mode")
-
-    topics = sorted({q["topic"] for q in s.questions})
-
-    st.caption(
-        f"พร้อมเล่น: {len(s.questions)} คำถาม · "
-        f"หัวข้อ: {', '.join(topics)}"
-    )
-
-    modes = [
-        ("battle", "Fight monsters with your knowledge"),
-        ("speed", "Answer before time runs out"),
-    ]
-
-    for mode, desc in modes:
-        with st.container(border=True):
-            st.subheader(MODE_NAME[mode])
-            st.write(desc)
-
-            if st.button(
-                "เล่นเลย",
-                key=mode,
-                use_container_width=True,
-            ):
-                start_game(mode)
-
-    with st.container(border=True):
-        st.subheader(MODE_NAME["weakness"])
-        st.write("Train your weakest topics")
-
-        if not s.history:
-            st.caption("ต้องเล่นเกมอื่นอย่างน้อย 1 รอบก่อน")
-
-        if st.button(
-            "เล่นเลย",
-            key="weak",
-            disabled=not s.history,
-            use_container_width=True,
-        ):
-            weakness.start()
-
-    if st.button("⬅️ เปลี่ยนเนื้อหา"):
-        go("material")
-
-
-def page_game():
-    g = s.game
-
-    if not g:
-        go("home")
-        return
-
-    st.caption(MODE_NAME[g["mode"]])
-
-    game_module = {
-        "battle": battle,
-        "speed": speed_run,
-        "weakness": weakness,
-    }[g["mode"]]
-
-    game_module.render(g)
-
-
-def page_result():
-    r = s.last_result
-
-    if not r:
-        go("home")
-        return
-
-    st.header(f"{MODE_NAME[r['mode']]} — ผลลัพธ์")
-
-    banner = {
-        "victory": ("success", "🏆 Victory!"),
-        "gameover": ("error", "💀 Game Over"),
-        "timeup": ("info", "⏱️ หมดเวลา!"),
-        "done": ("success", "✅ ฝึกครบแล้ว!"),
+# Custom Kawaii CSS Theme
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Kanit', sans-serif;
+        background-color: #FFF5F5;
     }
+    
+    .kawaii-card {
+        background: #FFFFFF;
+        border-radius: 20px;
+        padding: 20px;
+        box-shadow: 0 8px 16px rgba(255, 182, 193, 0.3);
+        border: 2px solid #FFD1DC;
+        margin-bottom: 15px;
+    }
+    
+    .status-bar {
+        background: linear-gradient(135deg, #FFB7B2, #FFDAC1);
+        border-radius: 15px;
+        padding: 12px 20px;
+        color: #5D4037;
+        font-weight: bold;
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: space-around;
+        align-items: center;
+    }
+    
+    .avatar-img {
+        width: 90px;
+        height: 90px;
+        border-radius: 50%;
+        background-color: #FFE5EC;
+        padding: 5px;
+        border: 3px solid #FF80BF;
+        transition: transform 0.3s ease;
+    }
+    
+    .avatar-img:hover {
+        transform: scale(1.1);
+    }
+    
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
+    }
+    
+    .pulse-anim {
+        animation: pulse 2s infinite;
+    }
+    
+    .stButton>button {
+        background-color: #FF9AA2 !important;
+        color: white !important;
+        border-radius: 12px !important;
+        border: none !important;
+        font-weight: bold !important;
+        padding: 10px 24px !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    .stButton>button:hover {
+        background-color: #FFB7B2 !important;
+        transform: translateY(-2px);
+    }
+</style>
+""", unsafe_allow_html=True)
 
-    kind, msg = banner.get(
-        r["outcome"],
-        ("info", "จบเกม"),
-    )
+# Initialize Logic
+engine = GameEngine()
+user = st.session_state.user_data
 
-    getattr(st, kind)(msg)
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "map"
 
-    c1, c2 = st.columns(2)
-    c1.metric("🏆 Score", r["score"])
-    c2.metric("🎯 Accuracy", f"{r['accuracy']:.0%}")
+# Header Status Bar
+st.markdown(f"""
+<div class='status-bar'>
+    <span>🏰 Level: {user['level']}</span>
+    <span>⭐ Stars: {user['stars']}</span>
+    <span>🪙 Coins: {user['coins']}</span>
+    <span>✨ XP: {user['xp']} / {user['max_xp']}</span>
+</div>
+""", unsafe_allow_html=True)
 
-    c3, c4 = st.columns(2)
-    c3.metric("✨ XP", r["xp"])
-    c4.metric("🔥 Best Streak", r["best_streak"])
+# Navigation / Sidebar
+with st.sidebar:
+    st.title("🐾 AI Quest Tutor")
+    st.caption("ติวสนุกด้วยภารกิจพิชิตเวทมนตร์")
+    
+    st.subheader("👤 ตัวละครของคุณ")
+    avatars = st.session_state.avatars
+    selected = st.selectbox("เลือกคู่หูผจญภัย:", list(avatars.keys()), format_func=lambda x: avatars[x]["name"])
+    st.session_state.user_data["selected_avatar"] = selected
+    st.image(avatars[selected]["img"], width=80)
+    st.caption(avatars[selected]["desc"])
+    
+    st.markdown("---")
+    if st.button("🗺️ หน้าหลัก / แผนที่", use_container_width=True):
+        st.session_state.current_page = "map"
+        st.rerun()
+        
+    if st.button("📚 สร้างบทเรียนจาก AI", use_container_width=True):
+        st.session_state.current_page = "ai_generator"
+        st.rerun()
 
-    st.caption(
-        f"ตอบ {r['total']} ข้อ · "
-        f"ถูก {r['correct']} · ผิด {r['wrong']}"
-    )
+# Page 1: Map / Stage Selection
+if st.session_state.current_page == "map":
+    st.markdown("## 🗺️ แผนที่โลกแห่งการเรียนรู้ (World Map)")
+    st.write("เลือกด่านมอนสเตอร์เพื่อเริ่มภารกิจการต่อสู้ด้วยวิชาความรู้!")
 
-    if r["before"]:
-        st.subheader("📊 เทียบก่อน/หลังฝึก")
+    cols = st.columns(3)
+    for stage_id in [1, 2, 3]:
+        with cols[stage_id - 1]:
+            is_unlocked = stage_id in user["unlocked_stages"]
+            monster = st.session_state.monsters[stage_id]
+            
+            st.markdown(f"<div class='kawaii-card' style='text-align: center; opacity: {1.0 if is_unlocked else 0.5};'>", unsafe_allow_html=True)
+            st.image(monster["img"], width=80)
+            st.markdown(f"#### ด่านที่ {stage_id}: {monster['name']}")
+            
+            if is_unlocked:
+                st.success("ปลดล็อกแล้ว")
+                if st.button(f"⚔️ ท้าประลองด่าน {stage_id}", key=f"btn_stage_{stage_id}", use_container_width=True):
+                    if "active_questions" not in st.session_state or not st.session_state.active_questions:
+                        st.warning("⚠️ กรุณาสร้างโจทย์บทเรียนที่เมนู 'สร้างบทเรียนจาก AI' ในแถบด้านข้างก่อน!")
+                    else:
+                        st.session_state.selected_stage = stage_id
+                        st.session_state.current_page = "battle"
+                        st.rerun()
+            else:
+                st.info("🔒 ยังไม่ปลดล็อก")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        after = {
-            t["topic"]: t["accuracy"]
-            for t in r["topics"]
-        }
+# Page 2: AI Generator (Gemini Integration)
+elif st.session_state.current_page == "ai_generator":
+    st.markdown("## 📚 สร้างโจทย์ติวหนังสือด้วย AI (Gemini)")
+    
+    tab1, tab2 = st.tabs(["📝 ป้อนข้อความ/เนื้อหา", "📄 อัปโหลดไฟล์ PDF"])
+    
+    content = ""
+    with tab1:
+        content = st.text_area("กรอกเนื้อหาที่ต้องการให้ AI ออกข้อสอบ:", height=150, placeholder="เช่น เนื้อหาชีววิทยา เรื่อง การสังเคราะห์ด้วยแสง...")
+    
+    with tab2:
+        uploaded_file = st.file_uploader("อัปโหลดเอกสาร PDF", type=["pdf"])
+        if uploaded_file:
+            content = extract_text_from_pdf(uploaded_file)
+            st.success("อ่านไฟล์ PDF เรียบร้อยแล้ว!")
 
-        for topic, before_accuracy in r["before"].items():
-            if topic in after:
-                st.write(
-                    f"**{topic}**: "
-                    f"{before_accuracy:.0%} → "
-                    f"{after[topic]:.0%}"
-                )
+    col_diff, col_num = st.columns(2)
+    with col_diff:
+        difficulty = st.selectbox("ระดับความยาก:", ["ง่าย (Easy)", "ปานกลาง (Medium)", "ยาก (Hard)"])
+    with col_num:
+        num_q = st.slider("จำนวนข้อสอบ:", min_value=3, max_value=10, value=5)
 
-    overall = topic_report(s.history)
-
-    st.subheader("🎯 Topics")
-    render_topics(overall)
-
-    strong_topics = [
-        x["topic"] for x in overall
-        if x["level"] == "strong"
-    ]
-
-    weak_topics = [
-        x["topic"] for x in overall
-        if x["level"] == "weak"
-    ]
-
-    st.write(
-        "🟢 **Strong:** "
-        + (", ".join(strong_topics) or "-")
-    )
-
-    st.write(
-        "🔴 **Weak:** "
-        + (", ".join(weak_topics) or "-")
-    )
-
-    if r["recommendation"] is None:
-        with st.spinner("🤖 AI กำลังวิเคราะห์..."):
-            try:
-                r["recommendation"] = ai_engine.recommend(
-                    overall
-                )
-            except ai_engine.AIError as e:
-                st.warning(
-                    f"AI Recommendation ใช้งานไม่ได้: {e}"
-                )
-                r["recommendation"] = (
-                    "ลองเล่น Weakness Training "
-                    "กับหัวข้อสีแดง แล้วกลับมาเทียบผลอีกครั้ง"
-                )
-
-    st.info(
-        f"🤖 **AI Recommendation:** "
-        f"{r['recommendation']}"
-    )
-
-    if st.button(
-        "🔥 Weakness Training",
-        type="primary",
-        use_container_width=True,
-    ):
-        weakness.start()
-
-    if st.button(
-        "🔁 เล่นโหมดนี้อีกครั้ง",
-        use_container_width=True,
-    ):
-        if r["mode"] == "weakness":
-            weakness.start()
+    if st.button("🪄 ร่ายคาถา generarate โจทย์!", type="primary", use_container_width=True):
+        if not content.strip():
+            st.error("กรุณากรอกเนื้อหาหรืออัปโหลดไฟล์ PDF ก่อนทำการสร้างโจทย์")
         else:
-            start_game(r["mode"])
+            with st.spinner("🔮 กำลังอัญเชิญ Gemini AI สร้างบทเรียน..."):
+                questions = generate_questions_from_text(content, difficulty, num_q)
+                if questions:
+                    st.session_state.active_questions = questions
+                    st.success(f"สร้างโจทย์เรียบร้อยแล้ว {len(questions)} ข้อ! พร้อมเข้าสู่การต่อสู้")
+                    if st.button("⚔️ ไปที่แผนที่เพื่อเริ่มลุย!"):
+                        st.session_state.current_page = "map"
+                        st.rerun()
 
-    if st.button(
-        "🎮 เลือกเกมอื่น",
-        use_container_width=True,
-    ):
-        go("mode")
-
-    if st.button(
-        "🏠 Home",
-        use_container_width=True,
-    ):
-        go("home")
-
-
-PAGES = {
-    "home": page_home,
-    "material": page_material,
-    "mode": page_mode,
-    "game": page_game,
-    "result": page_result,
-}
-
-PAGES.get(s.page, page_home)()
-
+# Page 3: Interactive Battle System
+elif st.session_state.current_page == "battle":
+    st.markdown("## ⚔️ การต่อสู้ด้วยเวทมนตร์แห่งปัญญา")
+    if st.button("⬅️ ถอนตัวกลับแผนที่"):
+        st.session_state.current_page = "map"
+        st.rerun()
+        
+    stage = st.session_state.get("selected_stage", 1)
+    render_battle_game(st.session_state.get("active_questions", []), current_stage=stage)
