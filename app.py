@@ -1,5 +1,5 @@
 import streamlit as st
-from ai_engine import generate_questions_from_text, generate_questions_from_pdf
+from ai_engine import generate_questions
 from pdf_processor import extract_text_from_pdf
 from game_engine import GameEngine
 from games.battle import render_battle_game
@@ -172,7 +172,16 @@ elif st.session_state.current_page == "ai_generator":
             st.error("กรุณากรอกเนื้อหาหรืออัปโหลดไฟล์ PDF ก่อนทำการสร้างโจทย์")
         else:
             with st.spinner("🔮 กำลังอัญเชิญ Gemini AI สร้างบทเรียน..."):
-                questions = generate_questions_from_text(content, difficulty, num_q)
+               difficulty_map = {
+    "ง่าย (Easy)": "easy",
+    "ปานกลาง (Medium)": "medium",
+    "ยาก (Hard)": "hard",
+}
+
+questions = generate_questions(
+    material=content,
+    n=num_q,
+)
                 if questions:
                     st.session_state.active_questions = questions
                     st.success(f"สร้างโจทย์เรียบร้อยแล้ว {len(questions)} ข้อ! พร้อมเข้าสู่การต่อสู้")
