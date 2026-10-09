@@ -1,279 +1,138 @@
-
-import json
 import os
+import json
 import time
-
-import streamlit as st
+import re
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
+from google.genai.errors import APIError
 
-
-MODEL = "gemini-3.8-flash"
-MAX_CHARS = 30000
-MAX_ATTEMPTS = 5
-
-REWARD = {
-    "easy": (15, 10),
-    "medium": (20, 15),
-    "hard": (30, 25),
-}
-
-
-class AIError(Exception):
-    pass
-
-
-class QuestionSchema(BaseModel):
-    question: str
-    choices: list[str]
-    correct_answer: str
-    explanation: str
-    topic: str
-    difficulty: str
-
-
-def _get_api_key():
-    """อ่าน API Key จาก Environment หรือ Streamlit Secrets"""
-    key = os.getenv("GEMINI_API_KEY")
-
-    if not key:
+def get_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
         try:
-            key = st.secrets.get("GEMINI_API_KEY")
+            import streamlit as st
+            if "GEMINI_API_KEY" in st.secrets:
+                api_key = st.secrets["GEMINI_API_KEY"]
         except Exception:
-            key = None
+            pass
+            
+    if not api_key:
+        raise ValueError("ไม่พบ GEMINI_API_KEY ใน Environment Variables หรือ Streamlit Secrets")
+    
+    return genai.Client(api_key=api_key)
 
-    if not key or not str(key).strip():
-        raise AIError(
-            "ไม่พบ GEMINI_API_KEY กรุณาตั้งค่าใน "
-            "Streamlit Community Cloud > Settings > Secrets"
-        )
+def clean_json_response(text: str) -> str:
+    text = text.strip()
+    match = re.search(r'```(?:json)?\s*([\s\scoped\S]*?)\s*```', text, re.DOTALL)
+    if match:
+        text = match.group(1).strip()
+    return text
 
-    return str(key).strip()
-
-
-def _call(prompt: str, schema=None) -> str:
-    """เรียก Gemini พร้อมลองใหม่เมื่อเกิดข้อผิดพลาดชั่วคราว"""
-
-    try:
-        key = _get_api_key()
-    except AIError:
-        raise
-
-    config_args = {
-        "response_mime_type": (
-            "application/json" if schema else "text/plain"
-        ),
-    }
-
-    if schema is not None:
-        config_args["response_schema"] = schema
-
-    try:
-        config = types.GenerateContentConfig(**config_args)
-    except Exception as e:
-        raise AIError(
-            f"ตั้งค่า Gemini ไม่สำเร็จ: "
-            f"{type(e).__name__}: {str(e)[:300]}"
-        ) from e
-
-    last_error = None
-
-    for attempt in range(MAX_ATTEMPTS):
+def _call_gemini_with_retry(client, prompt: str, max_retries: int = 3) -> str:
+    # ใช้ gemini-2.5-flash สำหรับภารกิจสร้างข้อสอบ
+    model_name = "gemini-2.5-flash"
+    
+    for attempt in range(max_retries):
         try:
-            # สร้าง Client ใหม่สำหรับแต่ละคำขอ
-            with genai.Client(api_key=key) as client:
-                response = client.models.generate_content(
-                    model=MODEL,
-                    contents=prompt,
-                    config=config,
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    response_mime_type="application/json"
                 )
-
-            if not response.text:
-                raise AIError(
-                    "Gemini ส่งคำตอบว่างกลับมา กรุณาลองใหม่"
-                )
-
+            )
             return response.text
-
-        except AIError:
-            raise
-
+        except APIError as e:
+            error_str = str(e).lower()
+            if "429" in error_str or "resource_exhausted" in error_str or "quota" in error_str:
+                # แจ้ง Error 429 แบบชัดเจนเพื่อหยุด Batch
+                raise Exception("QUOTA_EXHAUSTED: โควตาการใช้งาน Gemini API หมดแล้ว กรุณาลองใหม่ในภายหลังหรือใช้ชุดข้อสอบที่บันทึกไว้")
+            
+            # หากเป็น Error ชั่วคราว (เช่น 503 Server Overloaded) ให้ทำ Exponential Backoff
+            if attempt < max_retries - 1:
+                sleep_time = (2 ** attempt) + 1
+                time.sleep(sleep_time)
+            else:
+                raise Exception(f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ Gemini API: {str(e)}")
         except Exception as e:
-            last_error = e
-            message = str(e).upper()
+            if "429" in str(e) or "resource_exhausted" in str(e).lower():
+                raise Exception("QUOTA_EXHAUSTED: โควตาการใช้งาน Gemini API หมดแล้ว กรุณาลองใหม่ในภายหลังหรือใช้ชุดข้อสอบที่บันทึกไว้")
+            raise e
 
-            temporary_error = any(
-                marker in message
-                for marker in (
-                    "503",
-                    "UNAVAILABLE",
-                    "429",
-                    "RESOURCE_EXHAUSTED",
-                    "500",
-                    "502",
-                    "504",
-                    "INTERNAL",
-                    "TIMEOUT",
-                )
-            )
-
-            if not temporary_error or attempt == MAX_ATTEMPTS - 1:
-                break
-
-            # เพิ่มเวลารอทีละขั้น: 2, 4, 8, 16 วินาที
-            wait_seconds = 2 ** (attempt + 1)
-            time.sleep(wait_seconds)
-
-    if last_error is not None:
-        final_message = str(last_error)
-        if "503" in final_message or "UNAVAILABLE" in final_message.upper():
-            raise AIError(
-                "Gemini กำลังมีผู้ใช้งานจำนวนมาก (503 UNAVAILABLE) "
-                "ระบบลองใหม่อัตโนมัติแล้วแต่ยังไม่สำเร็จ "
-                "กรุณารอ 1-3 นาทีแล้วกดสร้างโจทย์อีกครั้ง "
-                "หากยังเกิดซ้ำ ให้ตรวจสอบสถานะบริการหรือเลือกโมเดล "
-                "Gemini รุ่นอื่นที่รองรับในโปรเจกต์ของคุณ"
-            ) from last_error
-
-        raise AIError(
-            f"เรียก Gemini ไม่สำเร็จ: "
-            f"{type(last_error).__name__}: {str(last_error)[:300]}"
-        ) from last_error
-
-    raise AIError("เรียก Gemini ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")
-
-
-def _normalize(items, focus=None):
-    out = []
-
-    for i, item in enumerate(items):
-        try:
-            choices = [
-                str(choice).strip()
-                for choice in item["choices"]
-            ]
-
-            answer = (
-                str(item["correct_answer"])
-                .strip()
-                .upper()[:1]
-            )
-
-            difficulty = str(
-                item.get("difficulty", "medium")
-            ).lower()
-
-            if len(choices) != 4:
-                continue
-
-            if answer not in ("A", "B", "C", "D"):
-                continue
-
-            if difficulty not in REWARD:
-                difficulty = "medium"
-
-            topic = str(item["topic"]).strip()
-
-            if focus:
-                topic = focus[i % len(focus)]
-
-            damage, xp = REWARD[difficulty]
-
-            out.append({
-                "question": str(item["question"]),
-                "choices": choices,
-                "correct_answer": answer,
-                "explanation": str(item["explanation"]),
-                "topic": topic,
-                "difficulty": difficulty,
-                "damage": damage,
-                "xp": xp,
-            })
-
-        except (KeyError, TypeError, AttributeError):
-            continue
-
-    if not out:
-        raise AIError(
-            "AI สร้างคำถามไม่สำเร็จ "
-            "ลองใหม่หรือใช้เนื้อหาที่ยาวขึ้น"
-        )
-
-    return out
-
-
-def generate_questions(
-    material: str,
-    n: int = 10,
-    focus_topics=None,
-):
-    """สร้างคำถามสำหรับ Battle, Speed Run และ Weakness Training"""
-
-    if not material or not material.strip():
-        raise AIError("กรุณาใส่เนื้อหาบทเรียนก่อนสร้างคำถาม")
-
-    if focus_topics:
-        focus = (
-            "สร้างคำถามเฉพาะหัวข้อเหล่านี้เท่านั้น: "
-            f"{', '.join(focus_topics)} "
-            "และใส่ topic ให้ตรงกับชื่อหัวข้อเหล่านี้ทุกตัวอักษร "
-            "สร้างคำถามใหม่ที่หลากหลาย"
-        )
-    else:
-        focus = (
-            "แยกหัวข้อสำคัญของเนื้อหา กระจายคำถามให้ครอบคลุม "
-            "และตั้งชื่อ topic สั้น ๆ 1-4 คำ"
-        )
-
-    prompt = f"""คุณคือติวเตอร์ที่สร้างข้อสอบปรนัยจากเนื้อหาที่ผู้ใช้ให้มา
-
-กติกา:
-- สร้างคำถามปรนัย {n} ข้อ จากเนื้อหาด้านล่างเท่านั้น
-- ห้ามใช้ข้อมูลนอกเนื้อหา
-- choices ต้องมี 4 ตัวเลือก เป็นข้อความล้วน ไม่ต้องใส่ A/B/C/D นำหน้า
-- correct_answer เป็น A, B, C หรือ D
-- difficulty เป็น easy, medium หรือ hard
-- explanation อธิบายสั้น ๆ โดยอิงเนื้อหา
-- ใช้ภาษาเดียวกับเนื้อหา
-- {focus}
-
-เนื้อหา:
-\"\"\"{material[:MAX_CHARS]}\"\"\"
-"""
-
-    raw = _call(prompt, schema=list[QuestionSchema])
-
+def generate_questions_batch(text_content: str, difficulty: str, batch_size: int = 5) -> list:
+    client = get_client()
+    
+    prompt = f"""
+    คุณเป็นอาจารย์ผู้ออกข้อสอบมืออาชีพ ให้สร้างข้อสอบปรนัยจำนวน {batch_size} ข้อ จากเนื้อหาต่อไปนี้
+    
+    [ระดับความยาก]: {difficulty}
+    [เนื้อหา]:
+    {text_content[:4000]}
+    
+    ตอบกลับในรูปแบบ JSON Array เท่านั้น ห้ามใส่ข้อความอื่นนอกเหนือจาก JSON:
+    [
+      {{
+        "question": "คำถาม?",
+        "options": ["ตัวเลือก A", "ตัวเลือก B", "ตัวเลือก C", "ตัวเลือก D"],
+        "answer": "คำตอบที่ถูกต้องตรงกับ 1 ใน options",
+        "explanation": "คำอธิบายเฉลยสั้นๆ"
+      }}
+    ]
+    """
+    
+    raw_response = _call_gemini_with_retry(client, prompt)
+    cleaned = clean_json_response(raw_response)
+    
     try:
-        items = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        raise AIError(
-            "AI ตอบกลับในรูปแบบที่อ่านไม่ได้ กรุณาลองใหม่"
-        )
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+        return []
+    except json.JSONDecodeError:
+        return []
 
-    return _normalize(items, focus_topics)
-
-
-def recommend(report) -> str:
-    """สร้างคำแนะนำการทบทวนจากผลคะแนนแต่ละหัวข้อ"""
-
-    if not report:
-        return (
-            "ยังมีข้อมูลไม่เพียงพอ "
-            "ลองเล่นเกมเพิ่มอีกสักรอบ"
-        )
-
-    summary = "\n".join(
-        f"- {row['topic']}: {row['accuracy']:.0%} "
-        f"({row['correct']}/{row['total']})"
-        for row in report
-    )
-
-    prompt = (
-        "นักเรียนได้ผลตามหัวข้อดังนี้:\n"
-        + summary
-        + "\n\nเขียนคำแนะนำการทบทวนสั้น ๆ 2-3 ประโยค "
-        "เป็นภาษาไทย ให้กำลังใจ และบอกว่าควรกลับไปทบทวนหัวข้อไหนก่อน"
-    )
-
-    return _call(prompt).strip()
+def generate_questions_from_text(text_content: str, difficulty: str = "ปานกลาง", total_questions: int = 5):
+    """
+    สร้างข้อสอบตามจำนวนที่ต้องการ โดยแบ่งเป็น Batch ละ 5 ข้อ
+    ป้องกันปัญหา Timeout/Quota Exhausted และตัดข้อสอบที่ซ้ำออก
+    """
+    all_questions = []
+    seen_questions = set()
+    
+    # แบ่งจำนวนการขอออกเป็น Batch ย่อย ละไม่เกิน 5 ข้อ
+    batch_size = 5
+    remaining = total_questions
+    
+    while remaining > 0:
+        current_batch_count = min(batch_size, remaining)
+        try:
+            batch_result = generate_questions_batch(text_content, difficulty, current_batch_count)
+            
+            if not batch_result:
+                break
+                
+            new_added = 0
+            for q in batch_result:
+                q_text = q.get("question", "").strip()
+                if q_text and q_text not in seen_questions:
+                    seen_questions.add(q_text)
+                    all_questions.append(q)
+                    new_added += 1
+            
+            # หักลบจำนวนที่สร้างสำเร็จจริง
+            remaining -= new_added
+            
+            # ชะลอการเรียก API เล็กน้อยเพื่อถนอม Rate Limit
+            time.sleep(1)
+            
+        except Exception as e:
+            if "QUOTA_EXHAUSTED" in str(e):
+                # หากโควตาหมด ให้คืนค่าเท่าที่สร้างได้จริงทันที
+                print("Gemini Quota Exhausted: Returning generated questions so far.")
+                break
+            else:
+                # กรณี Error อื่นๆ ให้หยุดแล้วส่งคืนข้อสอบที่สร้างได้ก่อนหน้า
+                break
+                
+    return all_questions
