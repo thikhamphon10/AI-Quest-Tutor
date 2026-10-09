@@ -1,4 +1,5 @@
 
+
 import json
 import os
 
@@ -7,8 +8,10 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
+
 MODEL = "gemini-2.5-flash"
 MAX_CHARS = 30000
+
 REWARD = {
     "easy": (15, 10),
     "medium": (20, 15),
@@ -29,7 +32,8 @@ class QuestionSchema(BaseModel):
     difficulty: str
 
 
-def _client():
+def _get_api_key():
+    """อ่าน API Key จาก Environment หรือ Streamlit Secrets"""
     key = os.getenv("GEMINI_API_KEY")
 
     if not key:
@@ -40,22 +44,18 @@ def _client():
 
     if not key or not str(key).strip():
         raise AIError(
-            "ยังไม่ได้ตั้งค่า GEMINI_API_KEY "
-            "กรุณาตั้งค่าใน Streamlit Community Cloud "
-            "ที่ Manage app > Settings > Secrets"
+            "ไม่พบ GEMINI_API_KEY กรุณาตั้งค่าใน "
+            "Streamlit Community Cloud > Settings > Secrets"
         )
 
-    try:
-        return genai.Client(api_key=str(key).strip())
-    except Exception as e:
-        raise AIError(
-            f"สร้าง Gemini client ไม่สำเร็จ: "
-            f"{type(e).__name__}: {str(e)[:300]}"
-        ) from e
+    return str(key).strip()
 
 
 def _call(prompt: str, schema=None) -> str:
+    """เรียก Gemini โดยสร้างและปิด Client ภายในคำขอเดียว"""
     try:
+        key = _get_api_key()
+
         config_args = {
             "temperature": 0.6,
             "response_mime_type": (
@@ -66,21 +66,26 @@ def _call(prompt: str, schema=None) -> str:
         if schema is not None:
             config_args["response_schema"] = schema
 
-        cfg = types.GenerateContentConfig(**config_args)
+        config = types.GenerateContentConfig(**config_args)
 
-        response = _client().models.generate_content(
-            model=MODEL,
-            contents=prompt,
-            config=cfg,
-        )
+        # สร้าง Client ใหม่สำหรับคำขอนี้
+        with genai.Client(api_key=key) as client:
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=prompt,
+                config=config,
+            )
 
         if not response.text:
-            raise AIError("Gemini ส่งคำตอบว่างกลับมา กรุณาลองใหม่")
+            raise AIError(
+                "Gemini ส่งคำตอบว่างกลับมา กรุณาลองใหม่"
+            )
 
         return response.text
 
     except AIError:
         raise
+
     except Exception as e:
         raise AIError(
             f"เรียก Gemini ไม่สำเร็จ: "
@@ -91,33 +96,47 @@ def _call(prompt: str, schema=None) -> str:
 def _normalize(items, focus=None):
     out = []
 
-    for i, it in enumerate(items):
+    for i, item in enumerate(items):
         try:
-            choices = [str(c).strip() for c in it["choices"]]
-            ans = str(it["correct_answer"]).strip().upper()[:1]
-            diff = str(it.get("difficulty", "medium")).lower()
+            choices = [
+                str(choice).strip()
+                for choice in item["choices"]
+            ]
 
-            if len(choices) != 4 or ans not in ("A", "B", "C", "D"):
+            answer = (
+                str(item["correct_answer"])
+                .strip()
+                .upper()[:1]
+            )
+
+            difficulty = str(
+                item.get("difficulty", "medium")
+            ).lower()
+
+            if len(choices) != 4:
                 continue
 
-            if diff not in REWARD:
-                diff = "medium"
+            if answer not in ("A", "B", "C", "D"):
+                continue
 
-            topic = str(it["topic"]).strip()
+            if difficulty not in REWARD:
+                difficulty = "medium"
+
+            topic = str(item["topic"]).strip()
 
             if focus:
                 topic = focus[i % len(focus)]
 
-            dmg, xp = REWARD[diff]
+            damage, xp = REWARD[difficulty]
 
             out.append({
-                "question": str(it["question"]),
+                "question": str(item["question"]),
                 "choices": choices,
-                "correct_answer": ans,
-                "explanation": str(it["explanation"]),
+                "correct_answer": answer,
+                "explanation": str(item["explanation"]),
                 "topic": topic,
-                "difficulty": diff,
-                "damage": dmg,
+                "difficulty": difficulty,
+                "damage": damage,
                 "xp": xp,
             })
 
@@ -127,18 +146,22 @@ def _normalize(items, focus=None):
     if not out:
         raise AIError(
             "AI สร้างคำถามไม่สำเร็จ "
-            "ลองกดอีกครั้งหรือใช้เนื้อหาที่ยาวขึ้น"
+            "ลองใหม่หรือใช้เนื้อหาที่ยาวขึ้น"
         )
 
     return out
 
 
-def generate_questions(material: str, n: int = 10, focus_topics=None):
+def generate_questions(
+    material: str,
+    n: int = 10,
+    focus_topics=None,
+):
     """สร้างคำถามสำหรับ Battle, Speed Run และ Weakness Training"""
 
     if focus_topics:
         focus = (
-            f"สร้างคำถามเฉพาะหัวข้อเหล่านี้เท่านั้น: "
+            "สร้างคำถามเฉพาะหัวข้อเหล่านี้เท่านั้น: "
             f"{', '.join(focus_topics)} "
             "และใส่ topic ให้ตรงกับชื่อหัวข้อเหล่านี้ทุกตัวอักษร "
             "สร้างคำถามใหม่ที่หลากหลาย"
@@ -170,7 +193,9 @@ def generate_questions(material: str, n: int = 10, focus_topics=None):
     try:
         items = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        raise AIError("AI ตอบกลับในรูปแบบที่อ่านไม่ได้ กรุณาลองใหม่")
+        raise AIError(
+            "AI ตอบกลับในรูปแบบที่อ่านไม่ได้ กรุณาลองใหม่"
+        )
 
     return _normalize(items, focus_topics)
 
@@ -179,12 +204,15 @@ def recommend(report) -> str:
     """สร้างคำแนะนำการทบทวนจากผลคะแนนแต่ละหัวข้อ"""
 
     if not report:
-        return "ยังมีข้อมูลไม่เพียงพอ ลองเล่นเกมเพิ่มอีกสักรอบ"
+        return (
+            "ยังมีข้อมูลไม่เพียงพอ "
+            "ลองเล่นเกมเพิ่มอีกสักรอบ"
+        )
 
     summary = "\n".join(
-        f"- {r['topic']}: {r['accuracy']:.0%} "
-        f"({r['correct']}/{r['total']})"
-        for r in report
+        f"- {row['topic']}: {row['accuracy']:.0%} "
+        f"({row['correct']}/{row['total']})"
+        for row in report
     )
 
     prompt = (
