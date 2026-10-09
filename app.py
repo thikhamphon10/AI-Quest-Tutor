@@ -24,8 +24,13 @@ def start_game(mode):
 def page_home():
     st.title("🎮 AI Quest Tutor")
     st.caption("Learn. Play. Level Up.")
-    if not os.getenv("GEMINI_API_KEY"):
-        st.warning("ยังไม่ได้ตั้งค่า GEMINI_API_KEY — ใส่ใน Replit Secrets ก่อนเริ่มเล่น")
+    try:
+    api_key = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+except Exception:
+    api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    st.warning("ยังไม่ได้ตั้งค่า GEMINI_API_KEY — กรุณาตั้งค่าใน Streamlit Secrets")
     if st.button("🚀 Start Quest", type="primary", use_container_width=True):
         go("material")
     with st.expander("📈 My Progress", expanded=bool(s.history)):
