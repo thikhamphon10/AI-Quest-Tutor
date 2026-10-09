@@ -9,7 +9,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 MAX_CHARS = 30000
 
 REWARD = {
@@ -57,11 +57,10 @@ def _call(prompt: str, schema=None) -> str:
         key = _get_api_key()
 
         config_args = {
-            "temperature": 0.6,
-            "response_mime_type": (
-                "application/json" if schema else "text/plain"
-            ),
-        }
+    "response_mime_type": (
+        "application/json" if schema else "text/plain"
+    ),
+}
 
         if schema is not None:
             config_args["response_schema"] = schema
