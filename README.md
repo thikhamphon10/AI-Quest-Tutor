@@ -40,3 +40,8 @@ game_engine.py    Session State, History, Weakness Logic
 utils.py          ตัวช่วยแสดงผล
 games/            battle.py, speed_run.py, weakness.py
 ```
+
+
+## Character rendering
+
+ตัวละครและมอนสเตอร์ใช้ Emoji + CSS ภายใน Streamlit ไม่ต้องโหลดรูปจาก URL ภายนอกและไม่ต้องมีโฟลเดอร์ assets จึงลดปัญหารูปไม่แสดงบน Streamlit Cloud
