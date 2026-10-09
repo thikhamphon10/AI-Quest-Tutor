@@ -1,7 +1,7 @@
 
-
 import json
 import os
+import time
 
 import streamlit as st
 from google import genai
@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 MODEL = "gemini-3.8-flash"
 MAX_CHARS = 30000
+MAX_ATTEMPTS = 3
 
 REWARD = {
     "easy": (15, 10),
@@ -52,44 +53,81 @@ def _get_api_key():
 
 
 def _call(prompt: str, schema=None) -> str:
-    """เรียก Gemini โดยสร้างและปิด Client ภายในคำขอเดียว"""
+    """เรียก Gemini พร้อมลองใหม่เมื่อเกิดข้อผิดพลาดชั่วคราว"""
+
     try:
         key = _get_api_key()
-
-        config_args = {
-    "response_mime_type": (
-        "application/json" if schema else "text/plain"
-    ),
-}
-
-        if schema is not None:
-            config_args["response_schema"] = schema
-
-        config = types.GenerateContentConfig(**config_args)
-
-        # สร้าง Client ใหม่สำหรับคำขอนี้
-        with genai.Client(api_key=key) as client:
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=config,
-            )
-
-        if not response.text:
-            raise AIError(
-                "Gemini ส่งคำตอบว่างกลับมา กรุณาลองใหม่"
-            )
-
-        return response.text
-
     except AIError:
         raise
 
+    config_args = {
+        "response_mime_type": (
+            "application/json" if schema else "text/plain"
+        ),
+    }
+
+    if schema is not None:
+        config_args["response_schema"] = schema
+
+    try:
+        config = types.GenerateContentConfig(**config_args)
     except Exception as e:
         raise AIError(
-            f"เรียก Gemini ไม่สำเร็จ: "
+            f"ตั้งค่า Gemini ไม่สำเร็จ: "
             f"{type(e).__name__}: {str(e)[:300]}"
         ) from e
+
+    last_error = None
+
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            # สร้าง Client ใหม่สำหรับแต่ละคำขอ
+            with genai.Client(api_key=key) as client:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                    config=config,
+                )
+
+            if not response.text:
+                raise AIError(
+                    "Gemini ส่งคำตอบว่างกลับมา กรุณาลองใหม่"
+                )
+
+            return response.text
+
+        except AIError:
+            raise
+
+        except Exception as e:
+            last_error = e
+            message = str(e).upper()
+
+            temporary_error = any(
+                marker in message
+                for marker in (
+                    "503",
+                    "UNAVAILABLE",
+                    "429",
+                    "RESOURCE_EXHAUSTED",
+                    "500",
+                    "502",
+                    "504",
+                    "INTERNAL",
+                    "TIMEOUT",
+                )
+            )
+
+            if not temporary_error or attempt == MAX_ATTEMPTS - 1:
+                break
+
+            # รอ 2 วินาที แล้ว 4 วินาที ก่อนลองอีกครั้ง
+            time.sleep(2 ** (attempt + 1))
+
+    raise AIError(
+        f"เรียก Gemini ไม่สำเร็จ: "
+        f"{type(last_error).__name__}: {str(last_error)[:300]}"
+    ) from last_error
 
 
 def _normalize(items, focus=None):
@@ -157,6 +195,9 @@ def generate_questions(
     focus_topics=None,
 ):
     """สร้างคำถามสำหรับ Battle, Speed Run และ Weakness Training"""
+
+    if not material or not material.strip():
+        raise AIError("กรุณาใส่เนื้อหาบทเรียนก่อนสร้างคำถาม")
 
     if focus_topics:
         focus = (
