@@ -1,7 +1,7 @@
 
 import streamlit as st
 from ai_engine import generate_questions, AIError
-from pdf_processor import extract_text_from_pdf
+from pdf_processor import extract_text
 from game_engine import GameEngine
 from games.battle import render_battle_game
 
@@ -211,7 +211,7 @@ elif st.session_state.current_page == "ai_generator":
 
         if uploaded_file is not None and not content:
             try:
-                content = extract_text_from_pdf(uploaded_file)
+                content = extract_text(uploaded_file)
             except Exception as e:
                 st.error(f"อ่านไฟล์ PDF ไม่สำเร็จ: {e}")
                 content = ""
