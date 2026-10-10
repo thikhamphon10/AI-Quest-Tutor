@@ -16,6 +16,8 @@ export GEMINI_API_KEY="your_api_key_here"      # macOS / Linux
 ```
 ไฟล์ `.env.example` เป็นแค่ตัวอย่างชื่อตัวแปร
 
+โมเดลเริ่มต้นคือ `gemini-3.8-flash` (รุ่น 2.5 ถูก Google ยกเลิกสำหรับผู้ใช้ใหม่แล้ว) ถ้าต้องการเปลี่ยนให้ตั้ง `GEMINI_MODEL` ใน Secrets/Environment ได้เลย
+
 ## Run
 ```bash
 streamlit run app.py

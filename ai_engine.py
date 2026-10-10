@@ -6,6 +6,22 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
+# ชื่อโมเดล Gemini: เปลี่ยนได้โดยตั้งค่า GEMINI_MODEL ใน Secrets/Environment (ไม่ต้องแก้โค้ด)
+# gemini-2.5-flash ถูกยกเลิกสำหรับผู้ใช้ใหม่แล้ว (404 NOT_FOUND) จึงใช้ gemini-3.8-flash เป็นค่าเริ่มต้น
+DEFAULT_MODEL = "gemini-3.8-flash"
+
+
+def get_model_name() -> str:
+    name = os.getenv("GEMINI_MODEL")
+    if not name:
+        try:
+            import streamlit as st
+            name = st.secrets.get("GEMINI_MODEL")
+        except Exception:
+            name = None
+    return str(name).strip() if name else DEFAULT_MODEL
+
+
 # ข้อความข้อผิดพลาดล่าสุดจากการสร้างข้อสอบ (ให้หน้าเว็บแสดงสาเหตุจริง ไม่เหมารวมว่าโควตาเต็ม)
 last_error = ""
 
@@ -33,8 +49,7 @@ def clean_json_response(text: str) -> str:
     return text
 
 def _call_gemini_with_retry(client, prompt: str, max_retries: int = 3) -> str:
-    # ใช้ gemini-2.5-flash สำหรับภารกิจสร้างข้อสอบ
-    model_name = "gemini-2.5-flash"
+    model_name = get_model_name()
     
     for attempt in range(max_retries):
         try:
@@ -49,6 +64,9 @@ def _call_gemini_with_retry(client, prompt: str, max_retries: int = 3) -> str:
             return response.text
         except APIError as e:
             error_str = str(e).lower()
+            if "404" in error_str or "not_found" in error_str:
+                # โมเดลไม่มี/ถูกยกเลิก: ลองซ้ำไม่ช่วย แจ้งวิธีแก้ทันที
+                raise Exception(f"ไม่พบโมเดล Gemini ‘{model_name}’ (อาจถูกยกเลิก) กรุณาตั้งค่า GEMINI_MODEL ใน Secrets เป็นโมเดลที่ใช้ได้ เช่น {DEFAULT_MODEL} — รายละเอียด: {str(e)[:150]}")
             if "429" in error_str or "resource_exhausted" in error_str or "quota" in error_str:
                 # แจ้ง Error 429 แบบชัดเจนเพื่อหยุด Batch
                 raise Exception("QUOTA_EXHAUSTED: โควตาการใช้งาน Gemini API หมดแล้ว กรุณาลองใหม่ในภายหลังหรือใช้ชุดข้อสอบที่บันทึกไว้")
