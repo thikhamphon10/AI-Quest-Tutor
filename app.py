@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import random
 
 import streamlit as st
 
@@ -405,10 +406,19 @@ elif page == "question_bank":
         if topic != "ทุกหัวข้อ":
             filtered = [q for q in filtered if q.get("topic") == topic]
         st.info(f"มีข้อสอบ {len(filtered)} ข้อ · ใช้งานได้โดยไม่ต้องเรียก Gemini API")
-        st.caption("คลังเริ่มต้นมีตัวอย่างข้อสอบพื้นฐาน สามารถเพิ่มข้อสอบได้ในไฟล์ question_bank.json")
-        if st.button("🎮 เล่นชุดนี้", type="primary", use_container_width=True, disabled=not filtered):
-            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "")
-            engine.set_quiz(title, filtered)
+        max_q = len(filtered)
+        choices = [n for n in [5, 10, 15, 20, 30, 40, 50] if n <= max_q]
+        if max_q and max_q not in choices:
+            choices.append(max_q)
+        if not choices:
+            choices = [1]
+        count = st.selectbox("🎯 จำนวนข้อในการเล่นครั้งนี้", choices, index=min(1, len(choices)-1),
+                             help="ระบบจะสุ่มข้อสอบจากหัวข้อที่เลือกใหม่ทุกครั้งที่เริ่มเล่น")
+        st.caption("คลังตัวอย่างระดับพื้นฐาน ม.6 · สุ่มคำถามใหม่ทุกครั้ง · ไม่ใช้โควตา Gemini")
+        if st.button("🎮 สุ่มข้อสอบแล้วเริ่มเล่น", type="primary", use_container_width=True, disabled=not filtered):
+            selected_questions = random.sample(filtered, k=min(count, len(filtered)))
+            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "") + f" ({len(selected_questions)} ข้อ)"
+            engine.set_quiz(title, selected_questions)
             st.session_state.pop("battle", None)
             goto("map")
         with st.expander("ดูตัวอย่างข้อสอบ"):
