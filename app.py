@@ -7,7 +7,7 @@ import streamlit as st
 import ai_engine
 import visuals as V
 from ai_engine import generate_questions_from_text
-from game_engine import AVATAR_ORDER, AVATARS, LAST_STAGE, MONSTERS, GameEngine, stage_status
+from game_engine import AVATAR_ORDER, AVATARS, LAST_STAGE, MONSTERS, WEAPONS, GameEngine, stage_status
 from games.battle import render_battle_game, start_battle
 from pdf_processor import extract_text_from_pdf
 
@@ -49,6 +49,15 @@ def load_saved_quizzes():
     return quizzes
 
 
+def load_question_bank():
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "question_bank.json"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
 V.inject_css()
 
 # เรียกใช้ Game Engine (โหลดความก้าวหน้าจากไฟล์เซฟ ถ้ามี)
@@ -81,6 +90,30 @@ with st.sidebar:
     V.html(f'<div style="text-align:center"><img src="{V.hero_img(selected)}" width="110" alt="{AVATARS[selected]["name"]}"></div>', st.sidebar)
     st.caption(AVATARS[selected]["desc"])
     st.caption("✨ " + AVATARS[selected]["perk"])
+    player_name = st.text_input("ชื่อนักผจญภัย", value=user.get("player_name", "นักผจญภัย"), max_chars=24, key="player_name_input")
+    if player_name.strip() and player_name.strip() != user.get("player_name"):
+        user["player_name"] = player_name.strip()
+        engine.save()
+    weapons_owned = user.get("unlocked_weapons", ["star_wand"])
+    weapon_ids = [w for w in weapons_owned if w in WEAPONS] or ["star_wand"]
+    current_weapon = user.get("selected_weapon", "star_wand")
+    chosen_weapon = st.selectbox("อาวุธประจำตัว", weapon_ids,
+        index=weapon_ids.index(current_weapon) if current_weapon in weapon_ids else 0,
+        format_func=lambda w: f'{WEAPONS[w]["icon"]} {WEAPONS[w]["name"]}', key="weapon_select")
+    if chosen_weapon != current_weapon:
+        engine.select_weapon(chosen_weapon)
+        st.rerun()
+    with st.expander("🛍️ ร้านค้าอาวุธ"):
+        for wid, w in WEAPONS.items():
+            st.caption(f'{w["icon"]} **{w["name"]}** · {w["desc"]} · {w["cost"]} เหรียญ')
+            if wid in user.get("unlocked_weapons", []):
+                st.caption("มีแล้ว" + (" · กำลังใช้" if wid == user.get("selected_weapon") else ""))
+            elif st.button(f'ซื้อ {w["name"]} ({w["cost"]} 🪙)', key=f"buy_weapon_{wid}", disabled=user["coins"] < w["cost"], use_container_width=True):
+                ok, msg = engine.buy_weapon(wid)
+                if ok:
+                    st.rerun()
+                else:
+                    st.warning(msg)
 
     st.markdown("---")
     if st.button("🗺️ หน้าหลัก / แผนที่", use_container_width=True):
@@ -89,6 +122,10 @@ with st.sidebar:
         goto("ai_generator")
     if st.button("📁 คลังข้อสอบที่บันทึกไว้", use_container_width=True):
         goto("saved_quizzes")
+    if st.button("📚 คลังข้อสอบแยกตามวิชา", use_container_width=True):
+        goto("question_bank")
+    if st.button("📝 สมุดข้อผิดพลาด", use_container_width=True):
+        goto("error_notebook")
 
     st.markdown("---")
     with st.expander("💾 สำรอง / กู้คืนความก้าวหน้า"):
@@ -200,7 +237,7 @@ def open_hero(aid: str):
 # PAGE 1: แผนที่เลือกด่าน (MAP)
 # ---------------------------------------------------------
 if page == "map":
-    V.page_head("แผนที่โลกแห่งการเรียนรู้ (World Map)", "เลือกด่านมอนสเตอร์เพื่อเริ่มภารกิจการต่อสู้ด้วยวิชาความรู้!", user["selected_avatar"], "cheer")
+    V.page_head(f"ยินดีต้อนรับ {user.get('player_name', 'นักผจญภัย')} 🌟", "เลือกด่านมอนสเตอร์เพื่อเริ่มภารกิจการต่อสู้ด้วยวิชาความรู้!", user["selected_avatar"], "cheer")
     V.world_banner(user["selected_avatar"], st.session_state.quiz_title)
 
     qs = st.session_state.active_questions
@@ -279,6 +316,7 @@ elif page == "ai_generator":
             else:
                 st.error("ไม่สามารถอ่านข้อความจากไฟล์ PDF นี้ได้ (อาจเป็นไฟล์สแกนที่ต้องใช้ OCR) ลองวางเนื้อหาในแท็บข้อความแทน")
 
+    subject = st.selectbox("วิชา", ["ชีววิทยา", "ฟิสิกส์", "คณิตศาสตร์", "ภาษาอังกฤษ", "วิชาอื่น ๆ"])
     col_diff, col_num = st.columns(2)
     with col_diff:
         difficulty = st.selectbox("ระดับความยาก:", ["ง่าย", "ปานกลาง", "ยาก"], index=1)
@@ -298,6 +336,8 @@ elif page == "ai_generator":
                 questions = generate_questions_from_text(content, difficulty, num_q, emphasis)
             if questions:
                 title = title_input.strip() or "บทเรียนเวทมนตร์"
+                for q in questions:
+                    q.setdefault("subject", subject)
                 engine.set_quiz(title, questions)
                 saved = save_quiz_to_local(title, questions)
                 st.session_state.gen_done = {"n": len(questions), "asked": num_q, "saved": saved}
@@ -349,7 +389,66 @@ elif page == "saved_quizzes":
                         goto("map")
 
 # ---------------------------------------------------------
-# PAGE 4: ฉากการต่อสู้ (BATTLE)
+# PAGE 4: คลังข้อสอบเริ่มต้น แยกวิชา ใช้ได้โดยไม่เรียก AI
+# ---------------------------------------------------------
+elif page == "question_bank":
+    V.page_head("คลังข้อสอบแยกตามวิชา 📚", "เลือกทำข้อสอบสำรองได้ทันที แม้ Gemini ใช้โควตาครบแล้ว", user["selected_avatar"])
+    all_bank = load_question_bank()
+    subjects = sorted({q.get("subject", "ทั่วไป") for q in all_bank})
+    if not all_bank:
+        st.error("ไม่พบไฟล์ question_bank.json กรุณาตรวจสอบว่าอัปโหลดไฟล์โปรเจกต์ครบ")
+    else:
+        subject = st.selectbox("เลือกวิชา", subjects)
+        filtered = [q for q in all_bank if q.get("subject") == subject]
+        topics = sorted({q.get("topic", "ทั่วไป") for q in filtered})
+        topic = st.selectbox("เลือกบท/หัวข้อ", ["ทุกหัวข้อ"] + topics)
+        if topic != "ทุกหัวข้อ":
+            filtered = [q for q in filtered if q.get("topic") == topic]
+        st.info(f"มีข้อสอบ {len(filtered)} ข้อ · ใช้งานได้โดยไม่ต้องเรียก Gemini API")
+        st.caption("คลังเริ่มต้นมีตัวอย่างข้อสอบพื้นฐาน สามารถเพิ่มข้อสอบได้ในไฟล์ question_bank.json")
+        if st.button("🎮 เล่นชุดนี้", type="primary", use_container_width=True, disabled=not filtered):
+            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "")
+            engine.set_quiz(title, filtered)
+            st.session_state.pop("battle", None)
+            goto("map")
+        with st.expander("ดูตัวอย่างข้อสอบ"):
+            for i, q in enumerate(filtered, 1):
+                st.markdown(f"**{i}. {q['question']}**")
+                st.caption(" · ".join(q.get("options", [])))
+
+# ---------------------------------------------------------
+# PAGE 5: สมุดข้อผิดพลาด
+# ---------------------------------------------------------
+elif page == "error_notebook":
+    V.page_head("สมุดข้อผิดพลาด 📝", "รวบรวมข้อที่ตอบผิดเพื่อกลับมาทบทวน", user["selected_avatar"])
+    errors = user.get("error_notebook", [])
+    if not errors:
+        st.success("ยังไม่มีข้อผิดพลาดให้ทบทวน ลองทำข้อสอบแล้วระบบจะบันทึกข้อที่ตอบผิดให้อัตโนมัติ ✨")
+    else:
+        pending = [x for x in errors if not x.get("reviewed")]
+        c1, c2 = st.columns(2)
+        c1.metric("ข้อผิดพลาดทั้งหมด", len(errors))
+        c2.metric("ยังไม่ได้ทบทวน", len(pending))
+        for i, item in enumerate(reversed(errors)):
+            with st.container(border=True):
+                st.markdown(f"**{item.get('question', '')}**")
+                st.caption(f"{item.get('subject', 'ไม่ระบุ')} · {item.get('topic', 'ทั่วไป')}")
+                st.write(f"คำตอบของคุณ: {item.get('wrong_answer', '-')}")
+                st.write(f"เฉลย: {item.get('correct_answer', '-')}")
+                with st.expander("ดูคำอธิบาย"):
+                    st.write(item.get("explanation") or "ไม่มีคำอธิบาย")
+                if not item.get("reviewed"):
+                    if st.button("✅ ทบทวนแล้ว", key=f"review_error_{i}"):
+                        item["reviewed"] = True
+                        engine.save()
+                        st.rerun()
+        if st.button("🧹 ล้างสมุดข้อผิดพลาด", type="secondary"):
+            user["error_notebook"] = []
+            engine.save()
+            st.rerun()
+
+# ---------------------------------------------------------
+# PAGE 6: ฉากการต่อสู้ (BATTLE)
 # ---------------------------------------------------------
 elif page == "battle":
     V.page_head("การต่อสู้ด้วยเวทมนตร์แห่งปัญญา", "ตอบถูกเพื่อร่ายเวทโจมตี ตอบผิดจะเสียพลัง", user["selected_avatar"], "cheer")

@@ -20,6 +20,13 @@ AVATARS = {
 }
 AVATAR_ORDER = ["bunny", "cat", "bear", "fox"]
 DEFAULT_AVATAR = "bunny"
+
+WEAPONS = {
+    "star_wand": {"name": "ไม้กายสิทธิ์ดาว", "icon": "🪄", "damage": 1.00, "cost": 0, "desc": "อาวุธเริ่มต้นสมดุล"},
+    "berry_bow": {"name": "ธนูเบอร์รี", "icon": "🏹", "damage": 1.10, "cost": 100, "desc": "เพิ่มพลังโจมตี 10%"},
+    "moon_staff": {"name": "คทาจันทรา", "icon": "🔮", "damage": 1.20, "cost": 220, "desc": "เพิ่มพลังโจมตี 20%"},
+    "rainbow_blade": {"name": "ดาบสายรุ้ง", "icon": "⚔️", "damage": 1.35, "cost": 400, "desc": "เพิ่มพลังโจมตี 35%"},
+}
 # รหัสตัวละครของเวอร์ชันก่อนหน้า -> ตัวละครใหม่ (เซฟเก่ายังใช้ได้)
 LEGACY_AVATAR = {"shadow_fox": "fox", "arcane_mage": "cat", "cyber_knight": "bear", "storm_dragon": "bunny"}
 
@@ -51,7 +58,8 @@ SAVE_VERSION = 2
 
 
 def default_user() -> dict:
-    return {"level": 1, "xp": 0, "max_xp": 100, "coins": 50, "stars": 0, "unlocked_stages": [1],
+    return {"player_name": "นักผจญภัย", "level": 1, "xp": 0, "max_xp": 100, "coins": 50, "stars": 0, "unlocked_stages": [1],
+            "selected_weapon": "star_wand", "unlocked_weapons": ["star_wand"], "error_notebook": [],
             "selected_avatar": DEFAULT_AVATAR, "inventory": [], "unlocked_avatars": [DEFAULT_AVATAR],
             "stage_stars": {}, "best_streak": 0, "total_correct": 0, "total_answered": 0, "topic_stats": {}}
 
@@ -68,6 +76,17 @@ def sanitize_user(raw) -> dict:
     u = default_user()
     if not isinstance(raw, dict):
         return u
+    u["player_name"] = str(raw.get("player_name", "นักผจญภัย")).strip()[:24] or "นักผจญภัย"
+    owned_weapons = raw.get("unlocked_weapons", ["star_wand"])
+    if not isinstance(owned_weapons, list):
+        owned_weapons = ["star_wand"]
+    u["unlocked_weapons"] = list(dict.fromkeys(w for w in owned_weapons if w in WEAPONS))
+    if "star_wand" not in u["unlocked_weapons"]:
+        u["unlocked_weapons"].insert(0, "star_wand")
+    selected_weapon = raw.get("selected_weapon", "star_wand")
+    u["selected_weapon"] = selected_weapon if selected_weapon in u["unlocked_weapons"] else "star_wand"
+    notebook = raw.get("error_notebook", [])
+    u["error_notebook"] = [x for x in notebook if isinstance(x, dict) and str(x.get("question", "")).strip()][-200:] if isinstance(notebook, list) else []
     u["level"] = _i(raw.get("level"), 1, 999, 1)
     u["max_xp"] = _i(raw.get("max_xp"), 100, 10**9, 100)
     u["xp"] = _i(raw.get("xp"), 0, u["max_xp"] - 1, 0)
@@ -163,6 +182,8 @@ class GameEngine:
             s.user_data = sanitize_user(data.get("user_data") if data else None)
             s.active_questions = sanitize_questions(data.get("active_questions") if data else [])
             s.quiz_title = str(data.get("quiz_title", ""))[:80] if data else ""
+        # รองรับเซฟ/Session State จากเวอร์ชันก่อนหน้า และเติมฟิลด์ใหม่โดยไม่ลบความคืบหน้าเดิม
+        s.user_data = sanitize_user(s.user_data)
         s.setdefault("active_questions", [])
         s.setdefault("quiz_title", "")
         s.setdefault("save_ok", True)
@@ -230,6 +251,45 @@ class GameEngine:
         if avatar_id in d["unlocked_avatars"]:
             d["selected_avatar"] = avatar_id
             self.save()
+
+    def buy_weapon(self, weapon_id: str):
+        d = st.session_state.user_data
+        if weapon_id not in WEAPONS:
+            return False, "ไม่พบอาวุธนี้"
+        if weapon_id in d["unlocked_weapons"]:
+            return False, "มีอาวุธนี้แล้ว"
+        cost = WEAPONS[weapon_id]["cost"]
+        if d["coins"] < cost:
+            return False, f"เหรียญไม่พอ ต้องใช้ {cost} เหรียญ"
+        d["coins"] -= cost
+        d["unlocked_weapons"].append(weapon_id)
+        d["selected_weapon"] = weapon_id
+        self.save()
+        return True, ""
+
+    def select_weapon(self, weapon_id: str):
+        d = st.session_state.user_data
+        if weapon_id in d["unlocked_weapons"]:
+            d["selected_weapon"] = weapon_id
+            self.save()
+
+    def record_error(self, entry: dict):
+        d = st.session_state.user_data
+        if not isinstance(entry, dict) or not entry.get("question"):
+            return
+        item = dict(entry)
+        item["question"] = str(item.get("question", ""))[:1000]
+        item["explanation"] = str(item.get("explanation", ""))[:1500]
+        item["topic"] = str(item.get("topic", "ทั่วไป"))[:60]
+        item["subject"] = str(item.get("subject", "ไม่ระบุ"))[:60]
+        item["wrong_answer"] = str(item.get("wrong_answer", ""))[:500]
+        item["correct_answer"] = str(item.get("correct_answer", ""))[:500]
+        item["reviewed"] = False
+        # ป้องกันบันทึกข้อเดิมซ้ำติดกัน
+        if not d["error_notebook"] or d["error_notebook"][-1].get("question") != item["question"]:
+            d["error_notebook"].append(item)
+            d["error_notebook"] = d["error_notebook"][-200:]
+        self.save()
 
     def finish_battle(self, stage_id: int, cleared: bool, correct: int, wrong: int, xp: int, coins: int,
                       best_streak: int, topics: dict):

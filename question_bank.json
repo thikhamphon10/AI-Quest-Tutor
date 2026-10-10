@@ -1,0 +1,302 @@
+[
+  {
+    "subject": "ชีววิทยา",
+    "question": "หน่วยพื้นฐานของสิ่งมีชีวิตคืออะไร?",
+    "options": [
+      "เซลล์",
+      "เนื้อเยื่อ",
+      "อวัยวะ",
+      "ระบบอวัยวะ"
+    ],
+    "answer": "เซลล์",
+    "explanation": "เซลล์เป็นหน่วยโครงสร้างและหน้าที่พื้นฐานของสิ่งมีชีวิต",
+    "topic": "เซลล์",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ชีววิทยา",
+    "question": "ออร์แกเนลล์ใดสร้างพลังงาน ATP เป็นหลัก?",
+    "options": [
+      "ไรโบโซม",
+      "ไมโทคอนเดรีย",
+      "กอลจิบอดี",
+      "ไลโซโซม"
+    ],
+    "answer": "ไมโทคอนเดรีย",
+    "explanation": "ไมโทคอนเดรียเป็นแหล่งสำคัญของการหายใจระดับเซลล์และการสร้าง ATP",
+    "topic": "ออร์แกเนลล์",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ชีววิทยา",
+    "question": "เม็ดเลือดแดงมีหน้าที่หลักอะไร?",
+    "options": [
+      "สร้างฮอร์โมน",
+      "ลำเลียงออกซิเจน",
+      "ย่อยอาหาร",
+      "สร้างแอนติบอดี"
+    ],
+    "answer": "ลำเลียงออกซิเจน",
+    "explanation": "ฮีโมโกลบินในเม็ดเลือดแดงจับและลำเลียงออกซิเจน",
+    "topic": "ระบบเลือด",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ชีววิทยา",
+    "question": "การสังเคราะห์ด้วยแสงเกิดขึ้นหลัก ๆ ในออร์แกเนลล์ใด?",
+    "options": [
+      "นิวเคลียส",
+      "คลอโรพลาสต์",
+      "ไมโทคอนเดรีย",
+      "ไรโบโซม"
+    ],
+    "answer": "คลอโรพลาสต์",
+    "explanation": "คลอโรพลาสต์มีคลอโรฟิลล์ที่ช่วยรับพลังงานแสง",
+    "topic": "พืช",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ชีววิทยา",
+    "question": "DNA มีบทบาทสำคัญอย่างไร?",
+    "options": [
+      "เก็บข้อมูลพันธุกรรม",
+      "ย่อยไขมัน",
+      "ลำเลียงออกซิเจน",
+      "สร้างผนังเซลล์ทุกชนิด"
+    ],
+    "answer": "เก็บข้อมูลพันธุกรรม",
+    "explanation": "DNA เก็บคำสั่งทางพันธุกรรมที่เกี่ยวข้องกับลักษณะและการทำงานของสิ่งมีชีวิต",
+    "topic": "พันธุกรรม",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ฟิสิกส์",
+    "question": "หน่วย SI ของแรงคืออะไร?",
+    "options": [
+      "จูล",
+      "วัตต์",
+      "นิวตัน",
+      "ปาสคาล"
+    ],
+    "answer": "นิวตัน",
+    "explanation": "แรงมีหน่วย SI เป็นนิวตัน (N)",
+    "topic": "หน่วย",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ฟิสิกส์",
+    "question": "ถ้าวัตถุมีมวล 2 kg และความเร่ง 3 m/s² แรงลัพธ์เท่าใด?",
+    "options": [
+      "5 N",
+      "6 N",
+      "1.5 N",
+      "9 N"
+    ],
+    "answer": "6 N",
+    "explanation": "ใช้กฎข้อสองของนิวตัน F = ma = 2 × 3 = 6 N",
+    "topic": "กฎของนิวตัน",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ฟิสิกส์",
+    "question": "ความเร็วเป็นปริมาณชนิดใด?",
+    "options": [
+      "สเกลาร์เท่านั้น",
+      "เวกเตอร์",
+      "ไม่มีหน่วย",
+      "ปริมาณไร้มิติ"
+    ],
+    "answer": "เวกเตอร์",
+    "explanation": "ความเร็วมีทั้งขนาดและทิศทาง จึงเป็นปริมาณเวกเตอร์",
+    "topic": "การเคลื่อนที่",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ฟิสิกส์",
+    "question": "หน่วยของความถี่คืออะไร?",
+    "options": [
+      "เฮิรตซ์",
+      "เมตร",
+      "แอมแปร์",
+      "เคลวิน"
+    ],
+    "answer": "เฮิรตซ์",
+    "explanation": "ความถี่มีหน่วยเฮิรตซ์ (Hz) หรือจำนวนรอบต่อวินาที",
+    "topic": "คลื่น",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ฟิสิกส์",
+    "question": "เมื่อแหล่งกำเนิดเสียงเคลื่อนที่เข้าหาผู้ฟังที่อยู่นิ่ง ความถี่ที่ได้ยินโดยทั่วไปเป็นอย่างไร?",
+    "options": [
+      "ต่ำลง",
+      "สูงขึ้น",
+      "คงเดิมเสมอ",
+      "เป็นศูนย์"
+    ],
+    "answer": "สูงขึ้น",
+    "explanation": "ปรากฏการณ์ดอปเพลอร์ทำให้ความถี่ที่สังเกตสูงขึ้นเมื่อแหล่งเสียงเข้าใกล้",
+    "topic": "ดอปเพลอร์",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "คณิตศาสตร์",
+    "question": "อนุพันธ์ของ x² คืออะไร?",
+    "options": [
+      "x",
+      "2x",
+      "x²",
+      "2"
+    ],
+    "answer": "2x",
+    "explanation": "ใช้กฎกำลัง d(xⁿ)/dx = nxⁿ⁻¹",
+    "topic": "อนุพันธ์",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "คณิตศาสตร์",
+    "question": "ค่า ∫ 2x dx เท่ากับข้อใด?",
+    "options": [
+      "2x + C",
+      "x² + C",
+      "2x² + C",
+      "x + C"
+    ],
+    "answer": "x² + C",
+    "explanation": "อินทิเกรต 2x ได้ x² และต้องบวกค่าคงที่ C",
+    "topic": "อินทิกรัล",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "คณิตศาสตร์",
+    "question": "ถ้า 3x = 12 แล้ว x เท่ากับเท่าใด?",
+    "options": [
+      "3",
+      "4",
+      "9",
+      "15"
+    ],
+    "answer": "4",
+    "explanation": "หารทั้งสองข้างด้วย 3 จึงได้ x = 4",
+    "topic": "สมการ",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "คณิตศาสตร์",
+    "question": "รากที่สองหลักของ 81 คืออะไร?",
+    "options": [
+      "-9",
+      "9",
+      "18",
+      "8"
+    ],
+    "answer": "9",
+    "explanation": "รากที่สองหลักหมายถึงค่าที่ไม่เป็นลบ ซึ่ง √81 = 9",
+    "topic": "รากที่สอง",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "คณิตศาสตร์",
+    "question": "กราฟของ y = 2x + 1 เป็นกราฟชนิดใด?",
+    "options": [
+      "วงกลม",
+      "เส้นตรง",
+      "พาราโบลา",
+      "ไฮเพอร์โบลา"
+    ],
+    "answer": "เส้นตรง",
+    "explanation": "สมการดีกรีหนึ่งในรูป y = mx + b มีกราฟเป็นเส้นตรง",
+    "topic": "กราฟ",
+    "difficulty": "ปานกลาง",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ภาษาอังกฤษ",
+    "question": "Choose the correct past tense: “go”",
+    "options": [
+      "goed",
+      "went",
+      "gone",
+      "going"
+    ],
+    "answer": "went",
+    "explanation": "The simple past form of “go” is “went”.",
+    "topic": "Verb forms",
+    "difficulty": "ง่าย",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ภาษาอังกฤษ",
+    "question": "Complete: “She ___ to school every day.”",
+    "options": [
+      "go",
+      "goes",
+      "going",
+      "gone"
+    ],
+    "answer": "goes",
+    "explanation": "Use “goes” with he, she, or it in the present simple.",
+    "topic": "Present simple",
+    "difficulty": "ง่าย",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ภาษาอังกฤษ",
+    "question": "What is the closest meaning of “rapid”?",
+    "options": [
+      "slow",
+      "quick",
+      "quiet",
+      "weak"
+    ],
+    "answer": "quick",
+    "explanation": "“Rapid” means fast or quick.",
+    "topic": "Vocabulary",
+    "difficulty": "ง่าย",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ภาษาอังกฤษ",
+    "question": "Choose the correct article: “I saw ___ elephant.”",
+    "options": [
+      "a",
+      "an",
+      "thee",
+      "no article"
+    ],
+    "answer": "an",
+    "explanation": "Use “an” before a vowel sound, as in “elephant”.",
+    "topic": "Articles",
+    "difficulty": "ง่าย",
+    "source": "คลังข้อสอบเริ่มต้น"
+  },
+  {
+    "subject": "ภาษาอังกฤษ",
+    "question": "Complete: “If it rains, we ___ at home.”",
+    "options": [
+      "stay",
+      "stayed",
+      "will stay",
+      "staying"
+    ],
+    "answer": "will stay",
+    "explanation": "A first conditional often uses if + present simple, will + base verb.",
+    "topic": "Conditionals",
+    "difficulty": "ง่าย",
+    "source": "คลังข้อสอบเริ่มต้น"
+  }
+]
