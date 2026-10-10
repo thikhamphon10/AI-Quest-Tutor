@@ -5,7 +5,7 @@ import uuid
 import streamlit as st
 
 import visuals as V
-from game_engine import AVATARS, LAST_STAGE, MONSTERS, GameEngine, avatar_mod, stage_status
+from game_engine import AVATARS, LAST_STAGE, MONSTERS, WEAPONS, GameEngine, avatar_mod, stage_status
 
 LET = "ABCD"
 WRONG_BASE = 20  # พลังที่ผู้เล่นเสียเมื่อตอบผิด 1 ข้อ (จาก 100)
@@ -34,7 +34,8 @@ def norm_q(q: dict) -> dict:
                 break
     return {"question": str(q.get("question", "")).strip(), "options": opts, "idx": idx,
             "explanation": str(q.get("explanation", "")).strip(),
-            "topic": (str(q.get("topic") or "ทั่วไป").strip() or "ทั่วไป")[:40]}
+            "topic": (str(q.get("topic") or "ทั่วไป").strip() or "ทั่วไป")[:40],
+            "subject": str(q.get("subject") or "ไม่ระบุ")[:60]}
 
 
 def start_battle(stage_id: int, questions: list):
@@ -65,7 +66,9 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
     t = b["topics"].setdefault(q["topic"], {"correct": 0, "wrong": 0})
     if ok:
         need = max(3, math.ceil(n * 0.7))
-        dmg = max(1, round(math.ceil(b["monster_max"] / need) * mod["dmg_mult"]))
+        weapon_id = d.get("selected_weapon", "star_wand")
+        weapon = WEAPONS.get(weapon_id, WEAPONS["star_wand"])
+        dmg = max(1, round(math.ceil(b["monster_max"] / need) * mod["dmg_mult"] * weapon["damage"]))
         b["monster_hp"] = max(0, b["monster_hp"] - dmg)
         b["correct"] += 1
         b["streak"] += 1
@@ -80,6 +83,14 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
         b["streak"] = 0
         t["wrong"] += 1
     b["log"].append({"q": q, "pick": pick, "ok": ok})
+    if not ok:
+        correct_text = q["options"][q["idx"]] if q["idx"] is not None else "เฉลยไม่ระบุ"
+        wrong_text = q["options"][pick] if 0 <= pick < len(q["options"]) else "ไม่ระบุ"
+        engine.record_error({
+            "question": q["question"], "subject": q.get("subject", st.session_state.get("quiz_title", "ไม่ระบุ")),
+            "topic": q.get("topic", "ทั่วไป"), "wrong_answer": wrong_text,
+            "correct_answer": correct_text, "explanation": q.get("explanation", "")
+        })
     b["last"] = {"ok": ok, "dmg": dmg}
     b["answered"] = True
     if b["monster_hp"] <= 0:
@@ -174,7 +185,8 @@ def render_battle_game(questions, current_stage=1):
     idx = min(b["idx"], n - 1)
     q = b["qs"][idx]
 
-    st.caption(f"ด่าน {current_stage} · {monster['place']}  |  เวทของ{avatar['name']}: {avatar['skill']}")
+    weapon = WEAPONS.get(d.get("selected_weapon", "star_wand"), WEAPONS["star_wand"])
+    st.caption(f"ด่าน {current_stage} · {monster['place']}  |  เวทของ{avatar['name']}: {avatar['skill']} · อาวุธ: {weapon['icon']} {weapon['name']}")
     V.html(V.battle_scene(b, monster, aid, avatar))
 
     if b["done"]:
