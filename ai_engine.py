@@ -6,6 +6,10 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
+# ข้อความข้อผิดพลาดล่าสุดจากการสร้างข้อสอบ (ให้หน้าเว็บแสดงสาเหตุจริง ไม่เหมารวมว่าโควตาเต็ม)
+last_error = ""
+
+
 def get_client():
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -23,7 +27,7 @@ def get_client():
 
 def clean_json_response(text: str) -> str:
     text = text.strip()
-    match = re.search(r'```(?:json)?\s*([\s\scoped\S]*?)\s*```', text, re.DOTALL)
+    match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text, re.DOTALL)
     if match:
         text = match.group(1).strip()
     return text
@@ -60,15 +64,17 @@ def _call_gemini_with_retry(client, prompt: str, max_retries: int = 3) -> str:
                 raise Exception("QUOTA_EXHAUSTED: โควตาการใช้งาน Gemini API หมดแล้ว กรุณาลองใหม่ในภายหลังหรือใช้ชุดข้อสอบที่บันทึกไว้")
             raise e
 
-def generate_questions_batch(text_content: str, difficulty: str, batch_size: int = 5) -> list:
+def generate_questions_batch(text_content: str, difficulty: str, batch_size: int = 5, emphasis: str = "") -> list:
     client = get_client()
+    emphasis = (emphasis or "").strip()[:200]
+    focus_line = f"\n    [หัวข้อที่ต้องเน้นเป็นพิเศษ (เฉพาะส่วนที่มีในเนื้อหา)]: {emphasis}" if emphasis else ""
     
     prompt = f"""
     คุณเป็นอาจารย์ผู้ออกข้อสอบมืออาชีพ ให้สร้างข้อสอบปรนัยจำนวน {batch_size} ข้อ จากเนื้อหาต่อไปนี้
     
-    [ระดับความยาก]: {difficulty}
+    [ระดับความยาก]: {difficulty}{focus_line}
     [เนื้อหา]:
-    {text_content[:4000]}
+    {text_content[:12000]}
     
     ตอบกลับในรูปแบบ JSON Array เท่านั้น ห้ามใส่ข้อความอื่นนอกเหนือจาก JSON:
     [
@@ -76,7 +82,8 @@ def generate_questions_batch(text_content: str, difficulty: str, batch_size: int
         "question": "คำถาม?",
         "options": ["ตัวเลือก A", "ตัวเลือก B", "ตัวเลือก C", "ตัวเลือก D"],
         "answer": "คำตอบที่ถูกต้องตรงกับ 1 ใน options",
-        "explanation": "คำอธิบายเฉลยสั้นๆ"
+        "explanation": "คำอธิบายเฉลยสั้นๆ",
+        "topic": "หัวข้อย่อยของข้อนี้ สั้นๆ 1-4 คำ"
       }}
     ]
     """
@@ -92,22 +99,25 @@ def generate_questions_batch(text_content: str, difficulty: str, batch_size: int
     except json.JSONDecodeError:
         return []
 
-def generate_questions_from_text(text_content: str, difficulty: str = "ปานกลาง", total_questions: int = 5):
+def generate_questions_from_text(text_content: str, difficulty: str = "ปานกลาง", total_questions: int = 5, emphasis: str = ""):
     """
     สร้างข้อสอบตามจำนวนที่ต้องการ โดยแบ่งเป็น Batch ละ 5 ข้อ
     ป้องกันปัญหา Timeout/Quota Exhausted และตัดข้อสอบที่ซ้ำออก
     """
+    global last_error
+    last_error = ""
     all_questions = []
     seen_questions = set()
     
     # แบ่งจำนวนการขอออกเป็น Batch ย่อย ละไม่เกิน 5 ข้อ
     batch_size = 5
     remaining = total_questions
+    stalls = 0  # กันวนไม่จบเมื่อ AI ตอบซ้ำจนไม่มีข้อใหม่
     
-    while remaining > 0:
+    while remaining > 0 and stalls < 3:
         current_batch_count = min(batch_size, remaining)
         try:
-            batch_result = generate_questions_batch(text_content, difficulty, current_batch_count)
+            batch_result = generate_questions_batch(text_content, difficulty, current_batch_count, emphasis)
             
             if not batch_result:
                 break
@@ -122,11 +132,13 @@ def generate_questions_from_text(text_content: str, difficulty: str = "ปาน
             
             # หักลบจำนวนที่สร้างสำเร็จจริง
             remaining -= new_added
+            stalls = stalls + 1 if new_added == 0 else 0
             
             # ชะลอการเรียก API เล็กน้อยเพื่อถนอม Rate Limit
             time.sleep(1)
             
         except Exception as e:
+            last_error = str(e)
             if "QUOTA_EXHAUSTED" in str(e):
                 # หากโควตาหมด ให้คืนค่าเท่าที่สร้างได้จริงทันที
                 print("Gemini Quota Exhausted: Returning generated questions so far.")
@@ -135,4 +147,4 @@ def generate_questions_from_text(text_content: str, difficulty: str = "ปาน
                 # กรณี Error อื่นๆ ให้หยุดแล้วส่งคืนข้อสอบที่สร้างได้ก่อนหน้า
                 break
                 
-    return all_questions
+    return all_questions[:total_questions]
