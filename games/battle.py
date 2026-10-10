@@ -1,124 +1,218 @@
+import html as _html
+import math
+import uuid
+
 import streamlit as st
-from game_engine import GameEngine
+
+import visuals as V
+from game_engine import AVATARS, LAST_STAGE, MONSTERS, GameEngine, avatar_mod, stage_status
+
+LET = "ABCD"
+WRONG_BASE = 20  # พลังที่ผู้เล่นเสียเมื่อตอบผิด 1 ข้อ (จาก 100)
+
+
+def _esc(t) -> str:
+    return _html.escape(str(t)).replace("\n", "<br>")
+
+
+def norm_q(q: dict) -> dict:
+    """รองรับทั้งรูปแบบ choices/correct_answer(A-D) และ options/answer(ข้อความ) ของ Gemini"""
+    opts = [str(o).strip() for o in q.get("choices", q.get("options", []))]
+    ans = str(q.get("correct_answer", q.get("answer", ""))).strip()
+    idx = None
+    if len(ans) == 1 and ans.upper() in LET and ord(ans.upper()) - 65 < len(opts):
+        idx = ord(ans.upper()) - 65
+    if idx is None:
+        for i, o in enumerate(opts):
+            if o == ans or o.casefold() == ans.casefold():
+                idx = i
+                break
+    if idx is None and ans:
+        for i, o in enumerate(opts):
+            if ans.casefold() in o.casefold() or (len(o) > 2 and o.casefold() in ans.casefold()):
+                idx = i
+                break
+    return {"question": str(q.get("question", "")).strip(), "options": opts, "idx": idx,
+            "explanation": str(q.get("explanation", "")).strip(),
+            "topic": (str(q.get("topic") or "ทั่วไป").strip() or "ทั่วไป")[:40]}
+
+
+def start_battle(stage_id: int, questions: list):
+    """เริ่มการต่อสู้ใหม่ทุกครั้ง (รีเซ็ต HP/สถานะทั้งหมด ไม่ค้างจากด่านก่อน)"""
+    qs = [norm_q(q) for q in questions]
+    qs = [q for q in qs if q["question"] and len(q["options"]) >= 2]
+    m = MONSTERS[stage_id]
+    st.session_state.battle = {
+        "uid": uuid.uuid4().hex[:8], "stage": stage_id, "qs": qs, "idx": 0,
+        "monster_hp": m["hp"], "monster_max": m["max_hp"], "player_hp": 100,
+        "answered": False, "last": None, "done": None, "result": None,
+        "correct": 0, "wrong": 0, "streak": 0, "best_streak": 0, "xp": 0, "coins": 0,
+        "topics": {}, "log": [],
+    }
+
+
+def _finalize(engine: GameEngine, b: dict):
+    if b["result"] is None:
+        b["result"] = engine.finish_battle(b["stage"], b["done"] == "win", b["correct"], b["wrong"],
+                                           b["xp"], b["coins"], b["best_streak"], b["topics"])
+
+
+def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
+    d = st.session_state.user_data
+    mod = avatar_mod(d["selected_avatar"])
+    n = len(b["qs"])
+    ok = q["idx"] is not None and pick == q["idx"]
+    t = b["topics"].setdefault(q["topic"], {"correct": 0, "wrong": 0})
+    if ok:
+        need = max(3, math.ceil(n * 0.7))
+        dmg = max(1, round(math.ceil(b["monster_max"] / need) * mod["dmg_mult"]))
+        b["monster_hp"] = max(0, b["monster_hp"] - dmg)
+        b["correct"] += 1
+        b["streak"] += 1
+        b["best_streak"] = max(b["best_streak"], b["streak"])
+        b["xp"] += round((10 + 2 * min(b["streak"], 5)) * mod["xp_mult"])
+        b["coins"] += round(5 * mod["coin_mult"])
+        t["correct"] += 1
+    else:
+        dmg = max(1, round(WRONG_BASE * mod["wrong_mult"]))
+        b["player_hp"] = max(0, b["player_hp"] - dmg)
+        b["wrong"] += 1
+        b["streak"] = 0
+        t["wrong"] += 1
+    b["log"].append({"q": q, "pick": pick, "ok": ok})
+    b["last"] = {"ok": ok, "dmg": dmg}
+    b["answered"] = True
+    if b["monster_hp"] <= 0:
+        b["done"] = "win"
+    elif b["player_hp"] <= 0:
+        b["done"] = "lose"
+    elif b["idx"] + 1 >= n:
+        b["done"] = "win"  # ตอบครบทุกข้อโดยฮีโร่ยังมีแรง = ผ่านด่าน (กติกาเดิม)
+    if b["done"]:
+        _finalize(engine, b)
+
+
+def _result_panel(engine: GameEngine, b: dict):
+    r = b["result"]
+    win = b["done"] == "win"
+    total = b["correct"] + b["wrong"]
+    acc = b["correct"] / total if total else 0
+    if win:
+        st.success(f"🏆 ผ่านด่าน “{MONSTERS[b['stage']]['place']}” แล้ว!" + ("  ✨ ผ่านครั้งแรก รับโบนัสเพิ่ม" if r["first"] else ""))
+    else:
+        st.error("💤 ฮีโร่หมดแรงแล้ว ไม่เป็นไรนะ ทบทวนเฉลยด้านล่างแล้วลองใหม่ได้เลย!")
+    V.html(V.rewards_html(r["xp"], r["coins"], r["stars"] if win else None, r["level"] if r["level_ups"] else None))
+    if r["newly_unlocked"]:
+        st.info(f"🔓 ปลดล็อกด่านใหม่: ด่านที่ {r['newly_unlocked']} “{MONSTERS[r['newly_unlocked']]['place']}”")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🎯 ความแม่นยำ", f"{acc:.0%}")
+    c2.metric("✅ ถูก / ❌ ผิด", f"{b['correct']} / {b['wrong']}")
+    c3.metric("🔥 คอมโบสูงสุด", b["best_streak"])
+    st.progress(acc, text=f"ความแม่นยำรอบนี้ {acc:.0%}")
+
+    # สรุปหัวข้อที่ควรทบทวน
+    weak = [(t, v) for t, v in b["topics"].items() if v["wrong"] > 0]
+    weak.sort(key=lambda x: x[1]["correct"] / max(1, x[1]["correct"] + x[1]["wrong"]))
+    st.subheader("📌 หัวข้อที่ควรทบทวน")
+    if weak:
+        for t, v in weak:
+            tot = v["correct"] + v["wrong"]
+            st.progress(v["correct"] / tot, text=f"{t} — ถูก {v['correct']}/{tot}")
+    else:
+        st.success("เยี่ยมมาก! รอบนี้ไม่มีหัวข้อที่พลาดเลย 🌟")
+
+    wrongs = [x for x in b["log"] if not x["ok"]]
+    with st.expander(f"📖 เฉลยและคำอธิบาย ({len(b['log'])} ข้อ, ผิด {len(wrongs)} ข้อ)", expanded=bool(wrongs)):
+        for i, x in enumerate(b["log"], 1):
+            q = x["q"]
+            right = f"{LET[q['idx']]}. {q['options'][q['idx']]}" if q["idx"] is not None else "-"
+            mine = f"{LET[x['pick']]}. {q['options'][x['pick']]}"
+            V.html(f"""<div class="reviewbox {'ok' if x['ok'] else ''}"><b>{i}. {_esc(q['question'])}</b><br>
+                {'✅ คุณตอบ' if x['ok'] else '❌ คุณตอบ'}: {_esc(mine)}<br>{'' if x['ok'] else 'เฉลย: ' + _esc(right) + '<br>'}
+                💡 {_esc(q['explanation'] or 'ไม่มีคำอธิบาย')}</div>""")
+
+    nxt = b["stage"] + 1
+    can_next = win and nxt <= LAST_STAGE and stage_status(st.session_state.user_data, nxt)[0]
+    cols = st.columns(3 if can_next else 2)
+    i = 0
+    if can_next:
+        if cols[i].button("▶️ ด่านถัดไป", type="primary", use_container_width=True, key="res_next"):
+            start_battle(nxt, st.session_state.active_questions)
+            st.rerun()
+        i += 1
+    if cols[i].button("🔁 เล่นด่านนี้อีกครั้ง", use_container_width=True, key="res_retry",
+                      type="secondary" if can_next else "primary"):
+        start_battle(b["stage"], st.session_state.active_questions)
+        st.rerun()
+    if cols[i + 1].button("🗺️ กลับแผนที่", use_container_width=True, key="res_map"):
+        st.session_state.pop("battle", None)
+        st.session_state.current_page = "map"
+        st.rerun()
 
 
 def render_battle_game(questions, current_stage=1):
     engine = GameEngine()
     if not questions:
-        st.info("ยังไม่มีโจทย์สำหรับต่อสู้ ไปที่ AI Lesson Forge เพื่อสร้างโจทย์ก่อน")
-        return
-
-    monsters = st.session_state.monsters
-    monster_info = monsters.get(current_stage, monsters[1])
-    avatar_id = st.session_state.user_data.get("selected_avatar", "shadow_fox")
-    avatar_info = st.session_state.avatars.get(avatar_id, list(st.session_state.avatars.values())[0])
-
-    if "current_q_idx" not in st.session_state:
-        st.session_state.current_q_idx = 0
-    if "monster_hp" not in st.session_state:
-        st.session_state.monster_hp = monster_info["hp"]
-        st.session_state.monster_max_hp = monster_info["max_hp"]
-    if "last_action_effect" not in st.session_state:
-        st.session_state.last_action_effect = None
-    if "battle_answered" not in st.session_state:
-        st.session_state.battle_answered = False
-
-    idx = st.session_state.current_q_idx
-    if idx >= len(questions) or st.session_state.monster_hp <= 0:
-        st.markdown("""
-        <div style="background:linear-gradient(135deg,#2B2347,#5B3F8C);border-radius:24px;padding:28px;color:white;text-align:center;margin:12px 0 18px">
-          <div style="font-size:70px">🏆✨🎉</div><div style="font-size:28px;font-weight:800">QUEST CLEARED!</div>
-          <div style="color:#E9D5FF;margin-top:5px">ชัยชนะเกิดจากความรู้และความพยายามของคุณ</div>
-        </div>
-        """, unsafe_allow_html=True)
-        xp_earned = 50 * len(questions)
-        coins_earned = 30 * len(questions)
-        st.success(f"🎁 รางวัล: +{xp_earned} XP  ·  +{coins_earned} Coins  ·  +1 ⭐")
-        if not st.session_state.get("reward_claimed", False):
-            if st.button("🌟 รับรางวัลและกลับแผนที่", use_container_width=True):
-                engine.add_reward(xp_earned, coins_earned, 1)
-                engine.unlock_next_stage(current_stage)
-                st.session_state.reward_claimed = True
-                for key in ("current_q_idx", "monster_hp", "monster_max_hp", "last_action_effect", "battle_answered"):
-                    st.session_state.pop(key, None)
-                st.session_state.current_page = "map"
-                st.rerun()
-        else:
-            if st.button("🗺️ กลับแผนที่", use_container_width=True):
-                st.session_state.current_page = "map"
-                st.rerun()
-        return
-
-    q = questions[idx]
-    options = q.get("choices", q.get("options", []))
-    correct_letter = str(q.get("correct_answer", q.get("answer", ""))).strip().upper()
-    hp = max(0, st.session_state.monster_hp)
-    max_hp = max(1, st.session_state.monster_max_hp)
-    hp_pct = int(hp / max_hp * 100)
-
-    col_hero, col_versus, col_enemy = st.columns([1, .45, 1], gap="medium")
-    with col_hero:
-        st.markdown(f"""
-        <div style="background:linear-gradient(160deg,#FFFFFF,#F3E8FF);border:1px solid #DDD6FE;border-radius:23px;padding:20px;text-align:center;min-height:205px;box-shadow:0 10px 25px #4C1D9510">
-          <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#7C3AED">YOUR HERO</div>
-          <div style="font-size:76px;line-height:1.4;filter:drop-shadow(0 8px 8px #8B5CF622)">{avatar_info['icon']}</div>
-          <div style="font-size:19px;font-weight:800;color:#2B2347">{avatar_info['name']}</div>
-          <div style="font-size:12px;color:#77738F">{avatar_info['class']}</div>
-          <div style="display:inline-block;margin-top:9px;padding:4px 10px;border-radius:999px;background:#EDE9FE;color:#6D28D9;font-size:11px;font-weight:700">{avatar_info['skill']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_versus:
-        st.markdown("<div style='text-align:center;padding-top:72px;font-size:24px;font-weight:900;color:#C026D3;text-shadow:0 3px 12px #C026D333'>VS</div><div style='text-align:center;font-size:20px'>⚡</div>", unsafe_allow_html=True)
-    with col_enemy:
-        st.markdown(f"""
-        <div style="background:linear-gradient(160deg,#FFFFFF,{monster_info['color']}16);border:1px solid {monster_info['color']}55;border-radius:23px;padding:20px;text-align:center;min-height:205px;box-shadow:0 10px 25px #4C1D9510">
-          <div style="font-size:11px;font-weight:800;letter-spacing:1.5px;color:#B45309">BOSS ENCOUNTER</div>
-          <div style="font-size:76px;line-height:1.4;filter:drop-shadow(0 8px 8px #8B5CF622)">{monster_info['icon']}</div>
-          <div style="font-size:19px;font-weight:800;color:#2B2347">{monster_info['name']}</div>
-          <div style="font-size:12px;color:#77738F">{monster_info['title']}</div>
-          <div style="height:8px;background:#EEEAF7;border-radius:99px;overflow:hidden;margin-top:12px"><div style="height:8px;width:{hp_pct}%;background:linear-gradient(90deg,#FB7185,#F97316);border-radius:99px"></div></div>
-          <div style="font-size:11px;color:#77738F;margin-top:5px">HP {hp} / {max_hp}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    st.progress((idx + 1) / len(questions), text=f"QUEST PROGRESS  ·  QUESTION {idx + 1} OF {len(questions)}")
-
-    if st.session_state.last_action_effect == "hit":
-        st.success("✨ โจมตีสำเร็จ! พลังความรู้เข้าเป้า")
-    elif st.session_state.last_action_effect == "miss":
-        st.warning("💡 ยังไม่ถูกนะ ลองอ่านเฉลยแล้วไปต่อได้เลย")
-
-    st.markdown(f"<div style='background:white;border:1px solid #E8E1F5;border-radius:20px;padding:22px;margin:12px 0'><div style='font-size:11px;font-weight:800;letter-spacing:1px;color:#8B5CF6'>KNOWLEDGE CHALLENGE</div><div style='font-size:21px;font-weight:700;color:#2B2347;margin-top:7px'>{q.get('question','')}</div></div>", unsafe_allow_html=True)
-
-    if not st.session_state.battle_answered:
-        selected_option = st.radio("เลือกคำตอบที่ถูกต้อง", options, key=f"battle_option_{current_stage}_{idx}")
-        if st.button("🪄  CAST SPELL / ส่งคำตอบ", type="primary", use_container_width=True):
-            if correct_letter in ("A", "B", "C", "D") and options:
-                correct_index = ord(correct_letter) - ord("A")
-                correct_text = options[correct_index] if correct_index < len(options) else correct_letter
-            else:
-                correct_text = correct_letter
-            damage = max(1, int(max_hp / len(questions)))
-            if selected_option == correct_text or selected_option == correct_letter:
-                st.session_state.monster_hp = max(0, st.session_state.monster_hp - damage)
-                st.session_state.last_action_effect = "hit"
-                st.toast("ตอบถูก! มอนสเตอร์ได้รับความเสียหาย", icon="⚡")
-            else:
-                st.session_state.last_action_effect = "miss"
-            st.session_state.battle_answered = True
+        st.info("ยังไม่มีโจทย์สำหรับต่อสู้ ไปที่ ‘สร้างบทเรียนใหม่’ หรือ ‘คลังข้อสอบ’ เพื่อเลือกโจทย์ก่อน")
+        if st.button("📚 ไปสร้างบทเรียน", type="primary"):
+            st.session_state.current_page = "ai_generator"
             st.rerun()
+        return
+
+    b = st.session_state.get("battle")
+    if not b or b["stage"] != current_stage:
+        start_battle(current_stage, questions)
+        b = st.session_state.battle
+    if not b["qs"]:
+        st.error("โจทย์ชุดนี้อ่านไม่ได้ (รูปแบบไม่ถูกต้อง) กรุณาสร้างหรือเลือกชุดข้อสอบใหม่")
+        return
+
+    d = st.session_state.user_data
+    aid = d["selected_avatar"]
+    avatar, monster = AVATARS[aid], MONSTERS[current_stage]
+    n = len(b["qs"])
+    idx = min(b["idx"], n - 1)
+    q = b["qs"][idx]
+
+    st.caption(f"ด่าน {current_stage} · {monster['place']}  |  เวทของ{avatar['name']}: {avatar['skill']}")
+    V.html(V.battle_scene(b, monster, aid, avatar))
+
+    if b["done"]:
+        _result_panel(engine, b)
+        return
+
+    answered_n = b["idx"] + (1 if b["answered"] else 0)
+    st.progress(answered_n / n, text=f"ภารกิจ · ข้อ {idx + 1} จาก {n}")
+    if b["streak"] >= 2:
+        V.html(f'<span class="combo">{V.BOLT} คอมโบ x{b["streak"]}!</span>')
+
+    V.html(f'<div class="qcard"><div class="lb">KNOWLEDGE CHALLENGE</div><div class="q">{_esc(q["question"])}</div></div>')
+
+    if not b["answered"]:
+        pick = st.radio("เลือกคำตอบที่ถูกต้อง", list(range(len(q["options"]))), index=None,
+                        format_func=lambda i: f"{LET[i]}. {q['options'][i]}", key=f"opt_{b['uid']}_{idx}")
+        if st.button("🪄 ร่ายเวท / ส่งคำตอบ", type="primary", use_container_width=True, key=f"cast_{b['uid']}_{idx}"):
+            if pick is None:
+                st.warning("เลือกคำตอบก่อนนะ แล้วค่อยร่ายเวท ✨")
+            else:
+                _answer(engine, b, q, pick)
+                st.rerun()
     else:
-        if correct_letter in ("A", "B", "C", "D") and options:
-            correct_index = ord(correct_letter) - ord("A")
-            correct_text = options[correct_index] if correct_index < len(options) else correct_letter
+        last = b["last"]
+        if last["ok"]:
+            st.success(f"✨ โจมตีสำเร็จ! ลด HP มอนสเตอร์ {last['dmg']}  (+XP/เหรียญ)")
         else:
-            correct_text = correct_letter
-        if st.session_state.last_action_effect == "miss":
-            st.markdown(f"<div style='background:#FFF7ED;border:1px solid #FED7AA;border-radius:14px;padding:13px;color:#9A3412'><b>คำตอบที่ถูก:</b> {correct_text}</div>", unsafe_allow_html=True)
-        if q.get("explanation"):
+            right = f"{LET[q['idx']]}. {q['options'][q['idx']]}" if q["idx"] is not None else "-"
+            st.warning(f"💦 เวทพลาด! {avatar['name']}เสียพลัง {last['dmg']}  ·  คำตอบที่ถูก: {right}")
+        if q["explanation"]:
             st.info(f"📖 ทำความเข้าใจ: {q['explanation']}")
-        if st.button("➡️ ไปข้อถัดไป", type="primary", use_container_width=True):
-            st.session_state.current_q_idx += 1
-            st.session_state.battle_answered = False
+        if st.button("➡️ ไปข้อถัดไป", type="primary", use_container_width=True, key=f"next_{b['uid']}_{idx}"):
+            b["idx"] += 1
+            b["answered"] = False
+            b["last"] = None
             st.rerun()
+
+    if st.button("🏳️ ถอยกลับแผนที่ (ไม่นับผลด่านนี้)", key="quit_battle"):
+        st.session_state.pop("battle", None)
+        st.session_state.current_page = "map"
+        st.rerun()
