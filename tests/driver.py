@@ -45,7 +45,7 @@ class App:
         os.environ["SAVE_DIR"] = os.path.join(self.work, "saves")
         os.environ.pop("GEMINI_API_KEY", None)
         os.chdir(self.work)  # saved_quizzes/ จะถูกสร้างในโฟลเดอร์ชั่วคราว ไม่ปนกับโปรเจกต์
-        for m in [m for m in sys.modules if m in ("app", "game_engine", "visuals", "storage", "ai_engine", "pdf_processor", "games", "games.battle")]:
+        for m in [m for m in sys.modules if m in ("app", "game_engine", "visuals", "storage", "ai_engine", "pdf_processor", "games", "games.battle", "games.review")]:
             del sys.modules[m]
         self.st = fs.install()
         install_fake_genai()
