@@ -74,7 +74,7 @@ def start_battle(stage_id: int, questions: list, count: int = None):
         "monster_hp": m["hp"], "monster_max": m["max_hp"], "player_hp": 100,
         "answered": False, "last": None, "done": None, "result": None,
         "correct": 0, "wrong": 0, "streak": 0, "best_streak": 0, "xp": 0, "coins": 0,
-        "topics": {}, "log": [],
+        "topics": {}, "subjects": {}, "log": [],
     }
 
 
@@ -91,7 +91,7 @@ STAGE_MODES = {
 def _finalize(engine: GameEngine, b: dict):
     if b["result"] is None:
         b["result"] = engine.finish_battle(b["stage"], b["done"] == "win", b["correct"], b["wrong"],
-                                           b["xp"], b["coins"], b["best_streak"], b["topics"])
+                                           b["xp"], b["coins"], b["best_streak"], b["topics"], b["subjects"])
 
 
 def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
@@ -100,6 +100,7 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
     n = len(b["qs"])
     ok = q["idx"] is not None and pick == q["idx"]
     t = b["topics"].setdefault(q["topic"], {"correct": 0, "wrong": 0})
+    sj = b["subjects"].setdefault(q["subject"], {}).setdefault(q["topic"], {"correct": 0, "wrong": 0})
     if ok:
         need = max(3, math.ceil(n * 0.7))
         weapon_id = d.get("selected_weapon", "star_wand")
@@ -121,6 +122,7 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
         coin_reward = 10 if b["stage"] == 5 else 5
         b["coins"] += round(coin_reward * mod["coin_mult"])
         t["correct"] += 1
+        sj["correct"] += 1
     else:
         penalty = WRONG_BASE + (10 if b["stage"] == 4 else 0)
         dmg = max(1, round(penalty * mod["wrong_mult"]))
@@ -128,6 +130,7 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
         b["wrong"] += 1
         b["streak"] = 0
         t["wrong"] += 1
+        sj["wrong"] += 1
     b["log"].append({"q": q, "pick": pick, "ok": ok})
     # ป้องกันการใช้ข้อเดิมซ้ำข้ามด่าน/รอบ และบันทึกลงไฟล์เซฟ
     used_ids = set(st.session_state.get("used_question_ids", []))
@@ -140,7 +143,8 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
         engine.record_error({
             "question": q["question"], "subject": q.get("subject", st.session_state.get("quiz_title", "ไม่ระบุ")),
             "topic": q.get("topic", "ทั่วไป"), "wrong_answer": wrong_text,
-            "correct_answer": correct_text, "explanation": q.get("explanation", "")
+            "correct_answer": correct_text, "explanation": q.get("explanation", ""),
+            "options": q["options"], "idx": q["idx"],  # เก็บตัวเลือกไว้ เพื่อทบทวนข้อนี้ซ้ำในโหมดทบทวนได้
         })
     b["last"] = {"ok": ok, "dmg": dmg}
     b["answered"] = True
@@ -192,6 +196,13 @@ def _result_panel(engine: GameEngine, b: dict):
             V.html(f"""<div class="reviewbox {'ok' if x['ok'] else ''}"><b>{i}. {_esc(q['question'])}</b><br>
                 {'✅ คุณตอบ' if x['ok'] else '❌ คุณตอบ'}: {_esc(mine)}<br>{'' if x['ok'] else 'เฉลย: ' + _esc(right) + '<br>'}
                 💡 {_esc(q['explanation'] or 'ไม่มีคำอธิบาย')}</div>""")
+
+    if wrongs:
+        st.caption(f"📝 ข้อที่ผิด {len(wrongs)} ข้อถูกจดลง ‘สมุดข้อผิดพลาด’ แล้ว ทบทวนซ้ำได้จากเมนู")
+        if st.button("📝 ไปทบทวนที่สมุดข้อผิดพลาด", use_container_width=True, key="res_notebook"):
+            st.session_state.pop("battle", None)
+            st.session_state.current_page = "error_notebook"
+            st.rerun()
 
     nxt = b["stage"] + 1
     can_next = win and nxt <= LAST_STAGE and stage_status(st.session_state.user_data, nxt)[0]
