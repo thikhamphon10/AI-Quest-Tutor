@@ -1,6 +1,8 @@
 import html as _html
 import math
 import uuid
+import random
+import hashlib
 
 import streamlit as st
 
@@ -38,9 +40,33 @@ def norm_q(q: dict) -> dict:
             "subject": str(q.get("subject") or "ไม่ระบุ")[:60]}
 
 
-def start_battle(stage_id: int, questions: list):
-    """เริ่มการต่อสู้ใหม่ทุกครั้ง (รีเซ็ต HP/สถานะทั้งหมด ไม่ค้างจากด่านก่อน)"""
-    qs = [norm_q(q) for q in questions]
+def question_id(q: dict) -> str:
+    """รหัสคงที่ของข้อสอบ ป้องกันข้อซ้ำแม้เรียงตัวเลือกใหม่"""
+    raw = "|".join([str(q.get("subject", "")).strip().casefold(),
+                    str(q.get("topic", "")).strip().casefold(),
+                    " ".join(str(q.get("question", "")).split()).casefold()])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def available_question_count(questions: list) -> int:
+    used = set(st.session_state.get("used_question_ids", []))
+    valid = [q for q in questions if isinstance(q, dict) and str(q.get("question", "")).strip()]
+    unique = {question_id(q): q for q in valid}
+    return sum(1 for qid in unique if qid not in used)
+
+
+def start_battle(stage_id: int, questions: list, count: int = None):
+    """สุ่มโดยไม่คืนข้อสอบที่ใช้แล้วในรอบผจญภัยเดียวกัน"""
+    valid = [q for q in questions if isinstance(q, dict) and str(q.get("question", "")).strip()]
+    used = set(st.session_state.get("used_question_ids", []))
+    unique = {question_id(q): q for q in valid}
+    fresh = [q for qid, q in unique.items() if qid not in used]
+    random.shuffle(fresh)
+    if count is None:
+        count = st.session_state.get("selected_question_count", min(10, len(fresh)))
+    chosen = fresh[:max(1, min(int(count or 1), len(fresh)))] if fresh else []
+    # บันทึกข้อที่ตอบจริงเท่านั้น; หากออกกลางด่าน ข้อที่ยังไม่เห็น/ยังไม่ตอบยังใช้ได้
+    qs = [norm_q(q) for q in chosen]
     qs = [q for q in qs if q["question"] and len(q["options"]) >= 2]
     m = MONSTERS[stage_id]
     st.session_state.battle = {
@@ -50,6 +76,16 @@ def start_battle(stage_id: int, questions: list):
         "correct": 0, "wrong": 0, "streak": 0, "best_streak": 0, "xp": 0, "coins": 0,
         "topics": {}, "log": [],
     }
+
+
+STAGE_MODES = {
+    1: ("⚔️ ศึกฝึกหัด", "ตอบถูกเพื่อโจมตีมอนสเตอร์ กติกาพื้นฐาน"),
+    2: ("🔥 ด่านคอมโบ", "ตอบถูกต่อเนื่องเพื่อเพิ่มพลังโจมตี ยิ่งคอมโบสูงยิ่งแรง"),
+    3: ("🛡️ ด่านทำลายเกราะ", "ทุกคำตอบถูกลำดับที่ 2 จะปล่อยคลื่นเวทแรงพิเศษ"),
+    4: ("💗 ด่านเอาตัวรอด", "ระวังคำตอบผิด เพราะมอนสเตอร์โจมตีแรงขึ้น"),
+    5: ("💰 ล่าขุมทรัพย์", "ตอบถูกเพื่อรับเหรียญโบนัสสำหรับซื้ออาวุธ"),
+    6: ("🐉 บอสหลายเฟส", "ทุก 3 ข้อบอสจะเปลี่ยนเฟส พลังโจมตีพิเศษเพิ่มขึ้น"),
+}
 
 
 def _finalize(engine: GameEngine, b: dict):
@@ -68,21 +104,36 @@ def _answer(engine: GameEngine, b: dict, q: dict, pick: int):
         need = max(3, math.ceil(n * 0.7))
         weapon_id = d.get("selected_weapon", "star_wand")
         weapon = WEAPONS.get(weapon_id, WEAPONS["star_wand"])
-        dmg = max(1, round(math.ceil(b["monster_max"] / need) * mod["dmg_mult"] * weapon["damage"]))
+        base_dmg = math.ceil(b["monster_max"] / need) * mod["dmg_mult"] * weapon["damage"]
+        stage = b["stage"]
+        if stage == 2:
+            base_dmg *= 1 + min(b["streak"], 4) * 0.12
+        elif stage == 3 and (b["correct"] + 1) % 2 == 0:
+            base_dmg *= 1.8
+        elif stage == 6 and ((b["idx"] // 3) >= 1):
+            base_dmg *= 1.25
+        dmg = max(1, round(base_dmg))
         b["monster_hp"] = max(0, b["monster_hp"] - dmg)
         b["correct"] += 1
         b["streak"] += 1
         b["best_streak"] = max(b["best_streak"], b["streak"])
         b["xp"] += round((10 + 2 * min(b["streak"], 5)) * mod["xp_mult"])
-        b["coins"] += round(5 * mod["coin_mult"])
+        coin_reward = 10 if b["stage"] == 5 else 5
+        b["coins"] += round(coin_reward * mod["coin_mult"])
         t["correct"] += 1
     else:
-        dmg = max(1, round(WRONG_BASE * mod["wrong_mult"]))
+        penalty = WRONG_BASE + (10 if b["stage"] == 4 else 0)
+        dmg = max(1, round(penalty * mod["wrong_mult"]))
         b["player_hp"] = max(0, b["player_hp"] - dmg)
         b["wrong"] += 1
         b["streak"] = 0
         t["wrong"] += 1
     b["log"].append({"q": q, "pick": pick, "ok": ok})
+    # ป้องกันการใช้ข้อเดิมซ้ำข้ามด่าน/รอบ และบันทึกลงไฟล์เซฟ
+    used_ids = set(st.session_state.get("used_question_ids", []))
+    used_ids.add(question_id(q))
+    st.session_state.used_question_ids = sorted(used_ids)
+    engine.save()
     if not ok:
         correct_text = q["options"][q["idx"]] if q["idx"] is not None else "เฉลยไม่ระบุ"
         wrong_text = q["options"][pick] if 0 <= pick < len(q["options"]) else "ไม่ระบุ"
@@ -175,7 +226,12 @@ def render_battle_game(questions, current_stage=1):
         start_battle(current_stage, questions)
         b = st.session_state.battle
     if not b["qs"]:
-        st.error("โจทย์ชุดนี้อ่านไม่ได้ (รูปแบบไม่ถูกต้อง) กรุณาสร้างหรือเลือกชุดข้อสอบใหม่")
+        st.warning("🎉 คุณใช้ข้อสอบในชุดนี้ครบแล้ว! ไม่มีการนำข้อเก่ามาสุ่มซ้ำ")
+        st.write("เลือกชุดข้อสอบใหม่ หรือเริ่มรอบใหม่ด้วยปุ่ม ‘เริ่มรอบใหม่’ บนหน้าคลังข้อสอบ")
+        if st.button("📚 ไปคลังข้อสอบ", type="primary", use_container_width=True):
+            st.session_state.pop("battle", None)
+            st.session_state.current_page = "question_bank"
+            st.rerun()
         return
 
     d = st.session_state.user_data
@@ -186,6 +242,11 @@ def render_battle_game(questions, current_stage=1):
     q = b["qs"][idx]
 
     weapon = WEAPONS.get(d.get("selected_weapon", "star_wand"), WEAPONS["star_wand"])
+    mode_title, mode_desc = STAGE_MODES.get(current_stage, STAGE_MODES[1])
+    st.subheader(mode_title)
+    st.caption(mode_desc)
+    if current_stage == 6:
+        st.info(f"🐉 เฟสบอส {min(3, b['idx'] // 3 + 1)} / 3 · {max(0, 3 - (b['idx'] % 3))} ข้อในเฟสนี้")
     st.caption(f"ด่าน {current_stage} · {monster['place']}  |  เวทของ{avatar['name']}: {avatar['skill']} · อาวุธ: {weapon['icon']} {weapon['name']}")
     V.html(V.battle_scene(b, monster, aid, avatar))
 
@@ -198,17 +259,41 @@ def render_battle_game(questions, current_stage=1):
     if b["streak"] >= 2:
         V.html(f'<span class="combo">{V.BOLT} คอมโบ x{b["streak"]}!</span>')
 
-    V.html(f'<div class="qcard"><div class="lb">KNOWLEDGE CHALLENGE</div><div class="q">{_esc(q["question"])}</div></div>')
+    challenge_labels = {1: "KNOWLEDGE CHALLENGE", 2: "COMBO CHALLENGE", 3: "BREAK THE SHIELD", 4: "SURVIVAL CHALLENGE", 5: "TREASURE CHALLENGE", 6: "BOSS PHASE CHALLENGE"}
+    V.html(f'<div class="qcard"><div class="lb">{challenge_labels.get(current_stage, "KNOWLEDGE CHALLENGE")}</div><div class="q">{_esc(q["question"])}</div></div>')
 
     if not b["answered"]:
-        pick = st.radio("เลือกคำตอบที่ถูกต้อง", list(range(len(q["options"]))), index=None,
-                        format_func=lambda i: f"{LET[i]}. {q['options'][i]}", key=f"opt_{b['uid']}_{idx}")
-        if st.button("🪄 ร่ายเวท / ส่งคำตอบ", type="primary", use_container_width=True, key=f"cast_{b['uid']}_{idx}"):
-            if pick is None:
-                st.warning("เลือกคำตอบก่อนนะ แล้วค่อยร่ายเวท ✨")
+        if current_stage in (2, 5, 6):
+            # ด่านเหล่านี้ใช้การกดเลือกคำตอบโดยตรง แทนการเลือกแล้วกดส่งแบบด่านแรก
+            if current_stage == 2:
+                st.caption("⚡ รอบคอมโบ: กดคำตอบที่คิดว่าถูกได้ทันที")
+                option_prefix = "⚡"
+            elif current_stage == 5:
+                st.caption("🎁 เลือกหีบสมบัติหนึ่งใบเพื่อเปิดคำตอบ")
+                option_prefix = "🎁"
             else:
-                _answer(engine, b, q, pick)
-                st.rerun()
+                st.caption("🐉 เลือกเวทโจมตีบอสในเฟสปัจจุบัน")
+                option_prefix = "🐉"
+            cols = st.columns(2)
+            for i, option in enumerate(q["options"]):
+                with cols[i % 2]:
+                    if st.button(f"{option_prefix} {LET[i]}. {option}", key=f"choice_{b['uid']}_{idx}_{i}", use_container_width=True):
+                        _answer(engine, b, q, i)
+                        st.rerun()
+        else:
+            if current_stage == 3:
+                shield_progress = b["correct"] % 2
+                st.info("🛡️ เกราะเวท: " + ("ตอบถูกอีก 1 ครั้งเพื่อชาร์จคลื่นโจมตีพิเศษ" if shield_progress else "เกราะกำลังรอคำตอบถูกเพื่อเริ่มชาร์จ"))
+            elif current_stage == 4:
+                st.warning("💗 โหมดเอาตัวรอด: คำตอบผิดทำให้เสียพลังมากกว่าด่านทั่วไป")
+            pick = st.radio("เลือกคำตอบที่ถูกต้อง", list(range(len(q["options"]))), index=None,
+                            format_func=lambda i: f"{LET[i]}. {q['options'][i]}", key=f"opt_{b['uid']}_{idx}")
+            if st.button("🪄 ร่ายเวท / ส่งคำตอบ", type="primary", use_container_width=True, key=f"cast_{b['uid']}_{idx}"):
+                if pick is None:
+                    st.warning("เลือกคำตอบก่อนนะ แล้วค่อยร่ายเวท ✨")
+                else:
+                    _answer(engine, b, q, pick)
+                    st.rerun()
     else:
         last = b["last"]
         if last["ok"]:
