@@ -8,7 +8,8 @@ import streamlit as st
 import ai_engine
 import visuals as V
 from ai_engine import generate_questions_from_text
-from game_engine import AVATAR_ORDER, AVATARS, LAST_STAGE, MONSTERS, WEAPONS, GameEngine, stage_status
+from game_engine import AVATAR_ORDER, AVATARS, LAST_STAGE, MONSTERS, WEAPONS, GameEngine, qkey, stage_status
+from games import review
 from games.battle import render_battle_game, start_battle, available_question_count, STAGE_MODES
 from pdf_processor import extract_text_from_pdf
 
@@ -50,13 +51,47 @@ def load_saved_quizzes():
     return quizzes
 
 
+DIFF_LEVELS = ["ง่าย", "ปานกลาง", "ยาก"]
+_DIFF_ALIAS = {"easy": "ง่าย", "medium": "ปานกลาง", "hard": "ยาก"}
+
+
+def norm_difficulty(v) -> str:
+    v = str(v or "").strip()
+    v = _DIFF_ALIAS.get(v.lower(), v)
+    return v if v in DIFF_LEVELS else "ปานกลาง"
+
+
 def load_question_bank():
+    """คลังข้อสอบรวม: question_bank.json (สำเร็จรูป) + ชุดที่ Gemini สร้างแล้วบันทึกไว้ใน saved_quizzes/ (ตัดข้อซ้ำ)
+    ทุกข้อมีฟิลด์ subject / subtopic(บทเรียน) / difficulty(ง่าย|ปานกลาง|ยาก) / source"""
+    out, seen = [], set()
+
+    def add(q, subject, subtopic, source):
+        if not isinstance(q, dict) or not str(q.get("question", "")).strip():
+            return
+        k = qkey(q["question"])
+        if k in seen:
+            return
+        seen.add(k)
+        item = dict(q)
+        item["subject"] = str(q.get("subject") or subject)[:60]
+        item["subtopic"] = str(q.get("subtopic") or q.get("topic") or subtopic)[:60]
+        item["difficulty"] = norm_difficulty(q.get("difficulty"))
+        item["source"] = q.get("source") or source
+        out.append(item)
+
     try:
-        with open(os.path.join(os.path.dirname(__file__), "question_bank.json"), "r", encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "question_bank.json"), "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, list) else []
+        for q in data if isinstance(data, list) else []:
+            add(q, "ทั่วไป", "ทั่วไป", "คลังข้อสอบสำเร็จรูป")
     except (OSError, ValueError):
-        return []
+        pass
+    for qz in load_saved_quizzes():
+        title = str(qz.get("title", "ชุดที่บันทึกไว้"))
+        for q in qz.get("questions", []):
+            add(q, "ชุดที่บันทึกไว้", title, "AI สร้าง")
+    return out
 
 
 V.inject_css()
@@ -127,6 +162,10 @@ with st.sidebar:
         goto("question_bank")
     if st.button("📝 สมุดข้อผิดพลาด", use_container_width=True):
         goto("error_notebook")
+    if st.button("📊 สรุปคะแนน / จุดอ่อนรายวิชา", use_container_width=True):
+        goto("summary")
+    if st.button("🎒 ตัวละครและอาวุธ", use_container_width=True):
+        goto("character")
 
     st.markdown("---")
     with st.expander("💾 สำรอง / กู้คืนความก้าวหน้า"):
@@ -151,8 +190,29 @@ if not st.session_state.get("save_ok", True):
     st.warning("⚠️ เซิร์ฟเวอร์บันทึกไฟล์เซฟไม่ได้ในขณะนี้ ความก้าวหน้ายังเล่นต่อได้ แต่ควรดาวน์โหลดไฟล์เซฟจากเมนูด้านข้างเก็บไว้")
 
 page = st.session_state.current_page
-if page != "battle":
+if page not in ("battle", "review"):
     V.hud(user, AVATARS)
+
+
+def nav():
+    """เมนูลัดด้านบน 2 แถว x 3 ปุ่ม (CSS บังคับไม่ให้ตกบรรทัดบนมือถือ) ใช้ได้โดยไม่ต้องเปิด sidebar"""
+    try:
+        box = st.container(key="topnav")
+    except TypeError:  # Streamlit เก่ากว่า 1.39 ไม่มี key
+        box = st.container()
+    rows = [[("map", "🗺️ แผนที่"), ("question_bank", "📚 คลังข้อสอบ"), ("ai_generator", "🪄 สร้างด้วย AI")],
+            [("error_notebook", "📝 สมุดผิด"), ("summary", "📊 สรุปผล"), ("character", "🎒 ตัวละคร")]]
+    with box:
+        for row in rows:
+            for col, (pg, label) in zip(st.columns(3), row):
+                with col:
+                    if st.button(label, key=f"nav_{pg}", use_container_width=True,
+                                 type="primary" if page == pg else "secondary"):
+                        goto(pg)
+
+
+if page not in ("battle", "review"):
+    nav()
 
 
 # ---------------------------------------------------------
@@ -340,6 +400,7 @@ elif page == "ai_generator":
                 st.error("ไม่สามารถอ่านข้อความจากไฟล์ PDF นี้ได้ (อาจเป็นไฟล์สแกนที่ต้องใช้ OCR) ลองวางเนื้อหาในแท็บข้อความแทน")
 
     subject = st.selectbox("วิชา", ["ชีววิทยา", "ฟิสิกส์", "คณิตศาสตร์", "ภาษาอังกฤษ", "วิชาอื่น ๆ"])
+    lesson = st.text_input("บทเรียน (ไม่บังคับ):", max_chars=60, placeholder="เช่น พันธุกรรม, บทที่ 3")
     col_diff, col_num = st.columns(2)
     with col_diff:
         difficulty = st.selectbox("ระดับความยาก:", ["ง่าย", "ปานกลาง", "ยาก"], index=1)
@@ -361,6 +422,10 @@ elif page == "ai_generator":
                 title = title_input.strip() or "บทเรียนเวทมนตร์"
                 for q in questions:
                     q.setdefault("subject", subject)
+                    q["difficulty"] = norm_difficulty(q.get("difficulty") or difficulty)
+                    if lesson.strip():
+                        q["subtopic"] = lesson.strip()  # ใช้จัดหมวดบทเรียนในคลังข้อสอบ
+                    q.setdefault("source", "AI สร้าง")
                 engine.set_quiz(title, questions)
                 saved = save_quiz_to_local(title, questions)
                 st.session_state.gen_done = {"n": len(questions), "asked": num_q, "saved": saved}
@@ -368,11 +433,24 @@ elif page == "ai_generator":
                 st.session_state.gen_done = None
                 err = ai_engine.last_error
                 if "QUOTA_EXHAUSTED" in err:
-                    st.error("❌ โควตา API ฟรีเต็ม กรุณาลองใหม่ภายหลัง หรือเลือกใช้ข้อสอบจาก ‘คลังข้อสอบที่บันทึกไว้’")
+                    st.session_state.quota_hit = True  # แสดงกล่องแจ้งเตือน 429 + ปุ่มกลับคลังด้านล่าง
                 elif err:
                     st.error(f"❌ สร้างข้อสอบไม่สำเร็จ: {err[:300]}")
                 else:
                     st.error("❌ AI ไม่ได้ส่งข้อสอบกลับมา ลองใหม่อีกครั้งหรือใช้เนื้อหาที่ยาวขึ้น")
+
+    # Error 429 (โควตา/อัตราการเรียกเต็ม): แจ้งเตือนชัดเจน และกลับไปทำข้อสอบในคลังได้ทันที
+    if st.session_state.get("quota_hit") or ai_engine.last_error_kind == "quota":
+        st.warning("⏳ โควตา Gemini API เต็มชั่วคราว (Error 429) — ไม่ได้เกิดจากตัวคุณ "
+                   "ลองสร้างใหม่ภายหลัง หรือเล่นต่อด้วยข้อสอบในคลังได้เลย ไม่ต้องใช้ AI")
+        q1, q2 = st.columns(2)
+        if q1.button("📚 ไปทำข้อสอบในคลัง", type="primary", use_container_width=True, key="quota_bank"):
+            st.session_state.quota_hit = False
+            goto("question_bank")
+        if q2.button("ปิดข้อความนี้", use_container_width=True, key="quota_dismiss"):
+            st.session_state.quota_hit = False
+            ai_engine.last_error_kind = ""
+            st.rerun()
 
     # ปุ่มนี้อยู่นอก if ของปุ่มสร้างข้อสอบ (เดิมซ้อนอยู่ข้างในจึงกดไม่ติด)
     done = st.session_state.get("gen_done")
@@ -415,11 +493,11 @@ elif page == "saved_quizzes":
 # PAGE 4: คลังข้อสอบเริ่มต้น แยกวิชา ใช้ได้โดยไม่เรียก AI
 # ---------------------------------------------------------
 elif page == "question_bank":
-    V.page_head("คลังข้อสอบแยกตามวิชา 📚", "เลือกทำข้อสอบสำรองได้ทันที แม้ Gemini ใช้โควตาครบแล้ว", user["selected_avatar"])
+    V.page_head("คลังข้อสอบแยกตามวิชา 📚", "เลือกวิชา บทเรียน ความยาก และจำนวนข้อ เล่นได้ทันทีแม้ Gemini ใช้โควตาครบแล้ว", user["selected_avatar"])
     all_bank = load_question_bank()
     subjects = sorted({q.get("subject", "ทั่วไป") for q in all_bank})
     if not all_bank:
-        st.error("ไม่พบไฟล์ question_bank.json กรุณาตรวจสอบว่าอัปโหลดไฟล์โปรเจกต์ครบ")
+        st.error("ไม่พบไฟล์ question_bank.json กรุณาตรวจสอบว่าอัปโหลดไฟล์โปรเจกต์ครบ หรือสร้างข้อสอบด้วย AI ก่อน")
     else:
         subject = st.selectbox("เลือกวิชา", subjects)
         filtered = [q for q in all_bank if q.get("subject") == subject]
@@ -427,6 +505,13 @@ elif page == "question_bank":
         topic = st.selectbox("เลือกบท/หัวข้อ", ["ทุกหัวข้อ"] + topics)
         if topic != "ทุกหัวข้อ":
             filtered = [q for q in filtered if (q.get("subtopic") or q.get("topic", "ทั่วไป")) == topic]
+        cnt = {d: sum(1 for q in filtered if q["difficulty"] == d) for d in DIFF_LEVELS}
+        V.html(f'<span class="pill e">ง่าย {cnt["ง่าย"]}</span><span class="pill m">ปานกลาง {cnt["ปานกลาง"]}</span>'
+               f'<span class="pill h">ยาก {cnt["ยาก"]}</span>'
+               f'<span class="pill ai">AI สร้าง {sum(1 for q in filtered if q.get("source") == "AI สร้าง")}</span>')
+        diff_pick = st.selectbox("ระดับความยาก", ["ทุกระดับ"] + DIFF_LEVELS)
+        if diff_pick != "ทุกระดับ":
+            filtered = [q for q in filtered if q["difficulty"] == diff_pick]
         st.info(f"มีข้อสอบ {len(filtered)} ข้อ · ใช้งานได้โดยไม่ต้องเรียก Gemini API")
         max_q = len(filtered)
         choices = [n for n in [5, 10, 15, 20, 30, 40, 50] if n <= max_q]
@@ -436,24 +521,28 @@ elif page == "question_bank":
             choices = [1]
         count = st.selectbox("🎯 จำนวนข้อในการเล่นครั้งนี้", choices, index=min(1, len(choices)-1),
                              help="ระบบจะสุ่มข้อสอบจากหัวข้อที่เลือกใหม่ทุกครั้งที่เริ่มเล่น")
-        st.caption("คลังตัวอย่างระดับพื้นฐาน ม.6 · เลือกจำนวนข้อได้ในแต่ละด่าน · ไม่ใช้โควตา Gemini")
+        st.caption("เลือกจำนวนข้อได้ในแต่ละด่าน · ไม่ใช้โควตา Gemini · ข้อที่ AI สร้างจะถูกเก็บเข้าคลังนี้อัตโนมัติ")
         if st.button("🎮 เลือกชุดข้อสอบนี้", type="primary", use_container_width=True, disabled=not filtered):
-            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "")
+            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "") + (f" · {diff_pick}" if diff_pick != "ทุกระดับ" else "")
             # เก็บทั้งคลังที่กรองแล้วไว้เป็น pool; จำนวนข้อเลือกแยกในแต่ละด่าน
-            engine.set_quiz(title, filtered)
+            engine.set_quiz(title[:80], filtered)
             st.session_state.selected_question_count = count
             st.session_state.pop("battle", None)
             goto("map")
+        if st.button("🪄 ไม่พอ? สร้างข้อใหม่ด้วย AI", use_container_width=True, key="bank_ai"):
+            goto("ai_generator")
         with st.expander("ดูตัวอย่างข้อสอบ"):
-            for i, q in enumerate(filtered, 1):
+            for i, q in enumerate(filtered[:50], 1):
                 st.markdown(f"**{i}. {q['question']}**")
-                st.caption(f"หัวข้อ: {q.get('subtopic') or q.get('topic', 'ทั่วไป')} · " + " · ".join(q.get("options", [])))
+                st.caption(f"หัวข้อ: {q.get('subtopic') or q.get('topic', 'ทั่วไป')} · ระดับ{q['difficulty']} · " + " · ".join(q.get("options", [])))
+            if len(filtered) > 50:
+                st.caption(f"แสดง 50 จาก {len(filtered)} ข้อ")
 
 # ---------------------------------------------------------
 # PAGE 5: สมุดข้อผิดพลาด
 # ---------------------------------------------------------
 elif page == "error_notebook":
-    V.page_head("สมุดข้อผิดพลาด 📝", "รวบรวมข้อที่ตอบผิดเพื่อกลับมาทบทวน", user["selected_avatar"])
+    V.page_head("สมุดข้อผิดพลาด 📝", "รวบรวมข้อที่ตอบผิดเพื่อกลับมาทบทวน พร้อมเฉลยและคำอธิบาย", user["selected_avatar"])
     errors = user.get("error_notebook", [])
     if not errors:
         st.success("ยังไม่มีข้อผิดพลาดให้ทบทวน ลองทำข้อสอบแล้วระบบจะบันทึกข้อที่ตอบผิดให้อัตโนมัติ ✨")
@@ -462,10 +551,21 @@ elif page == "error_notebook":
         c1, c2 = st.columns(2)
         c1.metric("ข้อผิดพลาดทั้งหมด", len(errors))
         c2.metric("ยังไม่ได้ทบทวน", len(pending))
-        for i, item in enumerate(reversed(errors)):
+        subs = sorted({e.get("subject", "ไม่ระบุ") for e in errors})
+        flt = st.selectbox("กรองตามวิชา", ["ทุกวิชา"] + subs)
+        only = None if flt == "ทุกวิชา" else flt
+        ids = review.pick_items(errors, only)
+        if st.button(f"🔁 เริ่มทบทวนซ้ำ ({len(ids)} ข้อ)", type="primary", use_container_width=True, disabled=not ids, key="nb_review"):
+            review.start(ids)
+            goto("review")
+        st.caption(f"ทบทวนรอบละไม่เกิน {review.MAX_ITEMS} ข้อ (ผิดบ่อยสุดก่อน) · ตอบถูกติดกัน 2 ครั้งถึงนับว่าทบทวนผ่าน "
+                   "· ข้อเก่าที่ไม่มีตัวเลือกเก็บไว้ ทบทวนซ้ำไม่ได้ แต่ยังอ่านเฉลยและกด ‘ทบทวนแล้ว’ เองได้")
+        shown = [(i, item) for i, item in enumerate(reversed(errors)) if only is None or item.get("subject") == only]
+        for i, item in shown[:40]:
             with st.container(border=True):
                 st.markdown(f"**{item.get('question', '')}**")
-                st.caption(f"{item.get('subject', 'ไม่ระบุ')} · {item.get('topic', 'ทั่วไป')}")
+                st.caption(f"{item.get('subject', 'ไม่ระบุ')} · {item.get('topic', 'ทั่วไป')} · ผิด {item.get('wrong_count', 1)} ครั้ง"
+                           + (" · ✅ ทบทวนแล้ว" if item.get("reviewed") else ""))
                 st.write(f"คำตอบของคุณ: {item.get('wrong_answer', '-')}")
                 st.write(f"เฉลย: {item.get('correct_answer', '-')}")
                 with st.expander("ดูคำอธิบาย"):
@@ -475,10 +575,124 @@ elif page == "error_notebook":
                         item["reviewed"] = True
                         engine.save()
                         st.rerun()
+        if len(shown) > 40:
+            st.caption(f"แสดง 40 จาก {len(shown)} ข้อ (เลือกวิชาเพื่อกรองดูเพิ่ม)")
         if st.button("🧹 ล้างสมุดข้อผิดพลาด", type="secondary"):
             user["error_notebook"] = []
             engine.save()
             st.rerun()
+
+elif page == "review":
+    V.page_head("ทบทวนข้อที่เคยพลาด", "อ่านโจทย์ ตอบใหม่ แล้วดูคำอธิบาย", user["selected_avatar"])
+    review.render()
+
+# ---------------------------------------------------------
+# PAGE 5.5: สรุปคะแนนและจุดอ่อนแยกตามวิชา
+# ---------------------------------------------------------
+elif page == "summary":
+    V.page_head("สรุปคะแนนและจุดอ่อน 📊", "ดูว่าวิชาไหนเก่งแล้ว วิชาไหนควรกลับไปทบทวน", user["selected_avatar"])
+    ss = user.get("subject_stats", {})
+    if not ss:
+        st.info("ยังไม่มีสถิติแยกตามวิชา ลองเล่นด่านสัก 1 ด่านก่อน ระบบจะสรุปให้ตรงนี้")
+        c1, c2 = st.columns(2)
+        if c1.button("🗺️ ไปแผนที่", type="primary", use_container_width=True, key="sum_map"):
+            goto("map")
+        if c2.button("📚 เลือกข้อสอบจากคลัง", use_container_width=True, key="sum_bank"):
+            goto("question_bank")
+    else:
+        ta = user["total_answered"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("🎯 ความแม่นยำรวม", f"{(user['total_correct'] / ta if ta else 0):.0%}")
+        m2.metric("📝 ตอบแล้ว", ta)
+        m3.metric("🔥 คอมโบสูงสุด", user["best_streak"])
+        rows = sorted((v["correct"] / (v["correct"] + v["wrong"]), subj, v) for subj, v in ss.items() if v["correct"] + v["wrong"] > 0)
+        weakest = [r[1] for r in rows if r[0] < 0.6]
+        if weakest:
+            st.warning("📌 ควรทบทวนก่อน: " + ", ".join(weakest))
+        else:
+            st.success("🌟 ทุกวิชาแม่นยำตั้งแต่ 60% ขึ้นไป เยี่ยมมาก!")
+        for k, (acc, subj, v) in enumerate(rows):  # วิชาที่อ่อนที่สุดอยู่บนสุด
+            tot = v["correct"] + v["wrong"]
+            level = "🔴 ต้องทบทวน" if acc < 0.6 else "🟢 แข็งแรง" if acc >= 0.8 else "🟡 พอใช้"
+            with st.container(border=True):
+                st.markdown(f"#### {subj}  {level}")
+                st.progress(acc, text=f"ถูก {v['correct']} จาก {tot} ข้อ ({acc:.0%})")
+                trows = sorted((tv["correct"] / (tv["correct"] + tv["wrong"]), t, tv) for t, tv in v["topics"].items()
+                               if tv["correct"] + tv["wrong"] > 0)
+                for tacc, t, tv in trows[:4]:
+                    st.progress(tacc, text=f"หัวข้อ {t} — ถูก {tv['correct']}/{tv['correct'] + tv['wrong']}")
+                if len(trows) > 4:
+                    st.caption(f"…และอีก {len(trows) - 4} หัวข้อที่แม่นยำกว่า")
+                n_m = sum(1 for e in user["error_notebook"] if not e.get("reviewed") and e.get("subject") == subj)
+                if st.button(f"🎯 ฝึกจุดอ่อนวิชา {subj}" + (f" (มีข้อผิดค้าง {n_m})" if n_m else ""), key=f"sum_train_{k}",
+                             use_container_width=True, type="primary" if acc < 0.6 else "secondary"):
+                    weak = {t for tacc, t, tv in trows if tacc < 0.6 and tv["correct"] + tv["wrong"] >= 2} or {t for _a, t, _v in trows[:2]}
+                    pool = [q for q in load_question_bank() if q.get("subject") == subj and (q.get("subtopic") in weak or q.get("topic") in weak)]
+                    pool += [{"question": e["question"], "options": e["options"], "answer": e["options"][e["idx"]], "explanation": e["explanation"],
+                              "topic": e["topic"], "subject": subj, "difficulty": "ปานกลาง"}
+                             for e in user["error_notebook"] if not e.get("reviewed") and e.get("subject") == subj and review.can_review(e)]
+                    seen, picked = set(), []
+                    for q in pool:
+                        if qkey(q["question"]) not in seen:
+                            seen.add(qkey(q["question"]))
+                            picked.append(q)
+                    random.shuffle(picked)
+                    if not picked:
+                        st.info("ยังไม่มีข้อในคลังสำหรับหัวข้อที่อ่อน ลองสร้างข้อใหม่ด้วย AI ในวิชานี้ได้เลย")
+                    else:
+                        engine.set_quiz(f"ฝึกจุดอ่อน: {subj}"[:80], picked[:12])
+                        st.session_state.selected_question_count = min(10, len(picked[:12]))
+                        st.session_state.pop("battle", None)
+                        st.toast(f"เตรียมข้อฝึก {len(picked[:12])} ข้อให้แล้ว!", icon="🎯")
+                        goto("map")
+        if st.button("📝 ไปสมุดข้อผิดพลาด", use_container_width=True, key="sum_notebook"):
+            goto("error_notebook")
+
+# ---------------------------------------------------------
+# PAGE 5.7: ตัวละครและอาวุธ (ใช้งานบนมือถือ/iPad ได้โดยไม่ต้องเปิด sidebar)
+# ---------------------------------------------------------
+elif page == "character":
+    V.page_head("ตัวละครและอาวุธ 🎒", "ตั้งชื่อนักผจญภัย เลือกคู่หู และเลือกอาวุธคู่ใจ", user["selected_avatar"], "cheer")
+    name_in = st.text_input("ชื่อนักผจญภัย", value=user.get("player_name", "นักผจญภัย"), max_chars=24, key="char_name_input")
+    if st.button("💾 บันทึกชื่อ", use_container_width=True, key="char_name_save"):
+        if name_in.strip():
+            user["player_name"] = name_in.strip()
+            engine.save()
+            st.toast("บันทึกชื่อแล้ว!", icon="✨")
+            st.rerun()
+        else:
+            st.warning("ชื่อต้องมีอย่างน้อย 1 ตัวอักษร")
+    st.subheader("🐾 คู่หูผจญภัย")
+    for col, aid in zip(st.columns(4), AVATAR_ORDER):
+        with col:
+            V.html(V.hero_card(aid, AVATARS[aid], aid in user["unlocked_avatars"], aid == user["selected_avatar"]))
+            own = aid in user["unlocked_avatars"]
+            label = "ใช้อยู่ ✓" if aid == user["selected_avatar"] else ("ดูรายละเอียด" if own else f"🔒 {AVATARS[aid]['cost']} เหรียญ")
+            if st.button(label, key=f"ch_hero_{aid}", use_container_width=True):
+                open_hero(aid)
+    st.subheader("⚔️ อาวุธ")
+    st.caption(f"เหรียญของคุณ: {user['coins']}")
+    for col, (wid, w) in zip(st.columns(len(WEAPONS)), WEAPONS.items()):
+        own = wid in user["unlocked_weapons"]
+        with col:
+            V.html(f'<div class="hcard {"sel" if wid == user["selected_weapon"] else ""} {"" if own else "locked"}">'
+                   f'<div style="font-size:2.4rem">{w["icon"]}</div><div class="nm">{V.esc(w["name"])}</div>'
+                   f'<div class="tg">{V.esc(w["desc"])}</div></div>')
+            if wid == user["selected_weapon"]:
+                st.button("ใช้อยู่ ✓", key=f"ch_w_cur_{wid}", disabled=True, use_container_width=True)
+            elif own:
+                if st.button("เลือกใช้", key=f"ch_w_use_{wid}", use_container_width=True):
+                    engine.select_weapon(wid)
+                    st.rerun()
+            else:
+                if st.button(f"🔓 {w['cost']} เหรียญ", key=f"ch_w_buy_{wid}", use_container_width=True, disabled=user["coins"] < w["cost"]):
+                    ok, msg = engine.buy_weapon(wid)
+                    if ok:
+                        st.toast(f"ปลดล็อก{w['name']}แล้ว!", icon="⚔️")
+                        st.rerun()
+                    st.warning(msg)
+                if user["coins"] < w["cost"]:
+                    st.caption(f"ขาดอีก {w['cost'] - user['coins']} เหรียญ")
 
 # ---------------------------------------------------------
 # PAGE 6: ฉากการต่อสู้ (BATTLE)

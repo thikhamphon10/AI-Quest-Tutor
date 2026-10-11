@@ -1,6 +1,7 @@
 """ธีมเกม Kawaii: CSS + ตัวสร้าง HTML (HUD, การ์ดด่าน, การ์ดตัวละคร, ฉากต่อสู้, รางวัล)
 ภาพทุกชิ้นอ่านจาก assets/ แล้วฝังเป็น data URI ในหน้าเว็บ -> ไม่มีลิงก์ภายนอก รูปจึงแสดงได้ทั้งบนเครื่องและ Streamlit Cloud"""
 import base64
+import html as _html
 import os
 from functools import lru_cache
 from game_engine import MAX_STARS
@@ -16,10 +17,34 @@ SKY = {  # (บน, ล่าง, พื้น) ของฉากต่อส�
 }
 
 
+def _find_asset(rel: str) -> str:
+    """หาไฟล์ใน assets/ โดยไม่สนตัวพิมพ์เล็ก-ใหญ่และ s ท้ายชื่อโฟลเดอร์ (Monster == monsters == Monsters)
+    เพราะ Streamlit Cloud/Linux แยกตัวพิมพ์ ถ้าชื่อโฟลเดอร์ไม่ตรงกับในโค้ด ภาพมอนสเตอร์จะหายเงียบ ๆ"""
+    path = os.path.join(ASSETS, rel)
+    if os.path.isfile(path):
+        return path
+    cur = ASSETS
+    for part in rel.replace("\\", "/").split("/"):
+        try:
+            names = os.listdir(cur)
+        except OSError:
+            return path
+        norm = (lambda n: n.casefold()) if "." in part else (lambda n: n.casefold().rstrip("s"))
+        hit = next((n for n in names if norm(n) == norm(part)), None)
+        if hit is None:
+            return path
+        cur = os.path.join(cur, hit)
+    return cur
+
+
+def esc(t) -> str:
+    return _html.escape(str(t), quote=True)
+
+
 @lru_cache(maxsize=None)
 def img_uri(rel: str) -> str:
     """อ่านไฟล์ภาพใน assets/ แล้วคืน data URI (ถ้าไฟล์หาย จะคืนภาพว่างโปร่งใสแทน ไม่ทำให้แอปล้ม)"""
-    path = os.path.join(ASSETS, rel)
+    path = _find_asset(rel)
     try:
         with open(path, "rb") as f:
             return "data:image/svg+xml;base64," + base64.b64encode(f.read()).decode()
@@ -178,6 +203,12 @@ h1,h2,h3,h4{color:var(--ink)!important;font-family:'Mali','Kanit',system-ui,sans
 .reviewbox.ok{border-left-color:#8fe0b5;}
 .empty{text-align:center;padding:1rem;}.empty img{width:120px;animation:bob 2.6s ease-in-out infinite;}
 
+.st-key-topnav [data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.35rem!important}
+.st-key-topnav [data-testid="stColumn"],.st-key-topnav [data-testid="column"]{min-width:0!important;flex:1 1 0!important;width:auto!important}
+.st-key-topnav .stButton>button{min-height:2.7rem;padding:0 .15rem;font-size:clamp(.72rem,2.6vw,.95rem);line-height:1.1}
+.stButton>button,.stDownloadButton>button{touch-action:manipulation}
+.pill{display:inline-block;background:#f3e9ff;border-radius:99px;padding:.1rem .65rem;font-size:.8rem;font-weight:700;margin:.1rem .15rem .1rem 0}
+.pill.e{background:#dff7e8}.pill.m{background:#fff0c9}.pill.h{background:#ffe0e6}.pill.ai{background:#e3f0ff}
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4%)}}
 @keyframes fly{0%{opacity:1;transform:translate(0,0) scale(.6)}100%{opacity:1;transform:translate(46cqw,-4cqw) scale(1.1)}}
 @keyframes fizz{0%{opacity:1;transform:translate(0,0) scale(.6)}60%{opacity:1;transform:translate(22cqw,-6cqw) scale(1)}100%{opacity:0;transform:translate(26cqw,6cqw) scale(.2)}}
@@ -203,7 +234,7 @@ def inject_css():
 
 
 def page_head(title: str, sub: str, hero: str = "bunny", state: str = "normal"):
-    html(f'<div class="pagehead"><img src="{hero_img(hero, state)}" alt=""><div><h2>{title}</h2><p>{sub}</p></div></div>')
+    html(f'<div class="pagehead"><img src="{hero_img(hero, state)}" alt=""><div><h2>{esc(title)}</h2><p>{esc(sub)}</p></div></div>')
 
 
 def hud(user: dict, avatars: dict):

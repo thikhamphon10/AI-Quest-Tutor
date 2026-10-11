@@ -24,6 +24,26 @@ def get_model_name() -> str:
 
 # ข้อความข้อผิดพลาดล่าสุดจากการสร้างข้อสอบ (ให้หน้าเว็บแสดงสาเหตุจริง ไม่เหมารวมว่าโควตาเต็ม)
 last_error = ""
+# ประเภทข้อผิดพลาดล่าสุด: "" | "quota" (429) | "model" (404) | "other"  ให้หน้าเว็บแสดงปุ่มกลับไปคลังข้อสอบเมื่อโควตาเต็ม
+last_error_kind = ""
+
+
+def _api_key():
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        try:
+            import streamlit as st
+            key = st.secrets.get("GEMINI_API_KEY")
+        except Exception:
+            key = None
+    return str(key).strip() if key else ""
+
+
+def scrub(msg) -> str:
+    """ลบ API Key ออกจากข้อความผิดพลาดก่อนแสดงบนหน้าเว็บ (กันความลับรั่ว)"""
+    msg = str(msg)
+    key = _api_key()
+    return msg.replace(key, "***") if key else msg
 
 
 def get_client():
@@ -66,7 +86,7 @@ def _call_gemini_with_retry(client, prompt: str, max_retries: int = 3) -> str:
             error_str = str(e).lower()
             if "404" in error_str or "not_found" in error_str:
                 # โมเดลไม่มี/ถูกยกเลิก: ลองซ้ำไม่ช่วย แจ้งวิธีแก้ทันที
-                raise Exception(f"ไม่พบโมเดล Gemini ‘{model_name}’ (อาจถูกยกเลิก) กรุณาตั้งค่า GEMINI_MODEL ใน Secrets เป็นโมเดลที่ใช้ได้ เช่น {DEFAULT_MODEL} — รายละเอียด: {str(e)[:150]}")
+                raise Exception(f"ไม่พบโมเดล Gemini ‘{model_name}’ (อาจถูกยกเลิก) กรุณาตั้งค่า GEMINI_MODEL ใน Secrets เป็นโมเดลที่ใช้ได้ เช่น {DEFAULT_MODEL} — รายละเอียด: {scrub(e)[:150]}")
             if "429" in error_str or "resource_exhausted" in error_str or "quota" in error_str:
                 # แจ้ง Error 429 แบบชัดเจนเพื่อหยุด Batch
                 raise Exception("QUOTA_EXHAUSTED: โควตาการใช้งาน Gemini API หมดแล้ว กรุณาลองใหม่ในภายหลังหรือใช้ชุดข้อสอบที่บันทึกไว้")
@@ -76,11 +96,11 @@ def _call_gemini_with_retry(client, prompt: str, max_retries: int = 3) -> str:
                 sleep_time = (2 ** attempt) + 1
                 time.sleep(sleep_time)
             else:
-                raise Exception(f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ Gemini API: {str(e)}")
+                raise Exception(f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ Gemini API: {scrub(e)[:300]}")
         except Exception as e:
             if "429" in str(e) or "resource_exhausted" in str(e).lower():
                 raise Exception("QUOTA_EXHAUSTED: โควตาการใช้งาน Gemini API หมดแล้ว กรุณาลองใหม่ในภายหลังหรือใช้ชุดข้อสอบที่บันทึกไว้")
-            raise e
+            raise Exception(scrub(e)[:300]) from None
 
 def generate_questions_batch(text_content: str, difficulty: str, batch_size: int = 5, emphasis: str = "") -> list:
     client = get_client()
@@ -122,8 +142,9 @@ def generate_questions_from_text(text_content: str, difficulty: str = "ปาน
     สร้างข้อสอบตามจำนวนที่ต้องการ โดยแบ่งเป็น Batch ละ 5 ข้อ
     ป้องกันปัญหา Timeout/Quota Exhausted และตัดข้อสอบที่ซ้ำออก
     """
-    global last_error
+    global last_error, last_error_kind
     last_error = ""
+    last_error_kind = ""
     all_questions = []
     seen_questions = set()
     
@@ -142,9 +163,10 @@ def generate_questions_from_text(text_content: str, difficulty: str = "ปาน
                 
             new_added = 0
             for q in batch_result:
-                q_text = q.get("question", "").strip()
-                if q_text and q_text not in seen_questions:
-                    seen_questions.add(q_text)
+                q_text = str(q.get("question", "")).strip() if isinstance(q, dict) else ""
+                key = " ".join(q_text.split()).casefold()
+                if q_text and key not in seen_questions:
+                    seen_questions.add(key)
                     all_questions.append(q)
                     new_added += 1
             
@@ -156,7 +178,9 @@ def generate_questions_from_text(text_content: str, difficulty: str = "ปาน
             time.sleep(1)
             
         except Exception as e:
-            last_error = str(e)
+            last_error = scrub(e)
+            last_error_kind = ("quota" if "QUOTA_EXHAUSTED" in last_error else
+                               "model" if "ไม่พบโมเดล" in last_error else "other")
             if "QUOTA_EXHAUSTED" in str(e):
                 # หากโควตาหมด ให้คืนค่าเท่าที่สร้างได้จริงทันที
                 print("Gemini Quota Exhausted: Returning generated questions so far.")

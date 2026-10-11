@@ -1,3 +1,5 @@
+import hashlib
+
 import streamlit as st
 
 import storage
@@ -61,7 +63,8 @@ def default_user() -> dict:
     return {"player_name": "นักผจญภัย", "level": 1, "xp": 0, "max_xp": 100, "coins": 50, "stars": 0, "unlocked_stages": [1],
             "selected_weapon": "star_wand", "unlocked_weapons": ["star_wand"], "error_notebook": [],
             "selected_avatar": DEFAULT_AVATAR, "inventory": [], "unlocked_avatars": [DEFAULT_AVATAR],
-            "stage_stars": {}, "best_streak": 0, "total_correct": 0, "total_answered": 0, "topic_stats": {}}
+            "stage_stars": {}, "best_streak": 0, "total_correct": 0, "total_answered": 0, "topic_stats": {},
+            "subject_stats": {}}
 
 
 def _i(v, lo=0, hi=10**9, d=0):
@@ -86,7 +89,8 @@ def sanitize_user(raw) -> dict:
     selected_weapon = raw.get("selected_weapon", "star_wand")
     u["selected_weapon"] = selected_weapon if selected_weapon in u["unlocked_weapons"] else "star_wand"
     notebook = raw.get("error_notebook", [])
-    u["error_notebook"] = [x for x in notebook if isinstance(x, dict) and str(x.get("question", "")).strip()][-200:] if isinstance(notebook, list) else []
+    u["error_notebook"] = [e for e in (_clean_error(x) for x in notebook if isinstance(x, dict)) if e][-ERROR_CAP:] if isinstance(notebook, list) else []
+    u["subject_stats"] = _clean_subject_stats(raw.get("subject_stats"))
     u["level"] = _i(raw.get("level"), 1, 999, 1)
     u["max_xp"] = _i(raw.get("max_xp"), 100, 10**9, 100)
     u["xp"] = _i(raw.get("xp"), 0, u["max_xp"] - 1, 0)
@@ -122,6 +126,49 @@ def sanitize_user(raw) -> dict:
                 ts[str(t)[:60]] = {"correct": _i(v.get("correct"), hi=10**6), "wrong": _i(v.get("wrong"), hi=10**6)}
     u["topic_stats"] = ts
     return u
+
+
+ERROR_CAP = 200
+MASTER_AFTER = 2  # ทบทวนแล้วตอบถูกติดกันกี่ครั้งถึงนับว่า ‘เข้าใจแล้ว’ (reviewed = True)
+
+
+def qkey(text) -> str:
+    """รหัสของข้อสอบจากตัวคำถาม (ไม่สนช่องว่าง/ตัวพิมพ์) ใช้รวมข้อที่ผิดซ้ำในสมุด"""
+    return hashlib.md5(" ".join(str(text).split()).casefold().encode("utf-8")).hexdigest()[:12]
+
+
+def _clean_error(x):
+    """ล้างรายการในสมุดข้อผิดพลาด (จากไฟล์เซฟ/ไฟล์ที่ผู้ใช้อัปโหลด) ฟิลด์เก่าของเวอร์ชันก่อนยังใช้ได้"""
+    q = str(x.get("question", "")).strip()
+    if not q:
+        return None
+    opts = x.get("options")
+    opts = [str(o)[:300] for o in opts][:6] if isinstance(opts, list) else []
+    idx = x.get("idx")
+    idx = idx if isinstance(idx, int) and 0 <= idx < len(opts) else None
+    if idx is None:
+        opts = []  # ไม่มีเฉลยที่ตรงกับตัวเลือก = ทบทวนแบบทำซ้ำไม่ได้ (ยังอ่านเฉลยได้)
+    return {"question": q[:1000], "subject": str(x.get("subject") or "ไม่ระบุ")[:60], "topic": str(x.get("topic") or "ทั่วไป")[:60],
+            "wrong_answer": str(x.get("wrong_answer", ""))[:500], "correct_answer": str(x.get("correct_answer", ""))[:500],
+            "explanation": str(x.get("explanation", ""))[:1500], "reviewed": bool(x.get("reviewed")),
+            "options": opts, "idx": idx if opts else None, "wrong_count": _i(x.get("wrong_count"), 1, 999, 1),
+            "review_streak": _i(x.get("review_streak"), 0, 99)}
+
+
+def _clean_subject_stats(raw) -> dict:
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for subj, v in list(raw.items())[:40]:
+        if not isinstance(v, dict):
+            continue
+        tps = {}
+        if isinstance(v.get("topics"), dict):
+            for t, tv in list(v["topics"].items())[:80]:
+                if isinstance(tv, dict):
+                    tps[str(t)[:60]] = {"correct": _i(tv.get("correct"), hi=10**6), "wrong": _i(tv.get("wrong"), hi=10**6)}
+        out[str(subj)[:60]] = {"correct": _i(v.get("correct"), hi=10**6), "wrong": _i(v.get("wrong"), hi=10**6), "topics": tps}
+    return out
 
 
 def sanitize_questions(qs) -> list:
@@ -280,25 +327,38 @@ class GameEngine:
             self.save()
 
     def record_error(self, entry: dict):
+        """จดข้อที่ตอบผิดลงสมุด (ข้อเดิมที่ผิดซ้ำจะรวมเป็นรายการเดียวและนับครั้งที่ผิดเพิ่ม)"""
         d = st.session_state.user_data
-        if not isinstance(entry, dict) or not entry.get("question"):
+        item = _clean_error(entry) if isinstance(entry, dict) else None
+        if not item:
             return
-        item = dict(entry)
-        item["question"] = str(item.get("question", ""))[:1000]
-        item["explanation"] = str(item.get("explanation", ""))[:1500]
-        item["topic"] = str(item.get("topic", "ทั่วไป"))[:60]
-        item["subject"] = str(item.get("subject", "ไม่ระบุ"))[:60]
-        item["wrong_answer"] = str(item.get("wrong_answer", ""))[:500]
-        item["correct_answer"] = str(item.get("correct_answer", ""))[:500]
-        item["reviewed"] = False
-        # ป้องกันบันทึกข้อเดิมซ้ำติดกัน
-        if not d["error_notebook"] or d["error_notebook"][-1].get("question") != item["question"]:
-            d["error_notebook"].append(item)
-            d["error_notebook"] = d["error_notebook"][-200:]
+        item["reviewed"], item["review_streak"], item["wrong_count"] = False, 0, 1
+        k = qkey(item["question"])
+        old = next((e for e in d["error_notebook"] if qkey(e["question"]) == k), None)
+        if old:  # ผิดซ้ำ: อัปเดตรายการเดิม ย้ายไปท้ายสุด และกลับมาเป็น ‘ยังไม่เข้าใจ’
+            item["wrong_count"] = min(999, old["wrong_count"] + 1)
+            d["error_notebook"].remove(old)
+        d["error_notebook"].append(item)
+        d["error_notebook"] = d["error_notebook"][-ERROR_CAP:]
         self.save()
 
+    def review_answer(self, question: str, ok: bool) -> dict:
+        """ผลการทบทวน 1 ข้อ: ตอบถูกติดกันครบ MASTER_AFTER ครั้ง = ทบทวนแล้ว (reviewed) ตอบผิดเริ่มนับใหม่"""
+        k = qkey(question)
+        e = next((x for x in st.session_state.user_data["error_notebook"] if qkey(x["question"]) == k), None)
+        if e is None:
+            return {"mastered": False, "right": 0}
+        if ok:
+            e["review_streak"] += 1
+            e["reviewed"] = e["review_streak"] >= MASTER_AFTER
+        else:
+            e["wrong_count"] = min(999, e["wrong_count"] + 1)
+            e["review_streak"], e["reviewed"] = 0, False
+        self.save()
+        return {"mastered": e["reviewed"], "right": e["review_streak"]}
+
     def finish_battle(self, stage_id: int, cleared: bool, correct: int, wrong: int, xp: int, coins: int,
-                      best_streak: int, topics: dict):
+                      best_streak: int, topics: dict, subjects: dict | None = None):
         """สรุปผลด่านและบันทึก คืน dict รางวัลสำหรับแสดงผล"""
         d = st.session_state.user_data
         total = correct + wrong
@@ -324,6 +384,14 @@ class GameEngine:
             e = d["topic_stats"].setdefault(t, {"correct": 0, "wrong": 0})
             e["correct"] += v["correct"]
             e["wrong"] += v["wrong"]
+        for subj, tps in (subjects or {}).items():  # สถิติแยกตามวิชา/หัวข้อ สำหรับหน้าสรุปจุดอ่อน
+            se = d["subject_stats"].setdefault(subj, {"correct": 0, "wrong": 0, "topics": {}})
+            for t, v in tps.items():
+                se["correct"] += v["correct"]
+                se["wrong"] += v["wrong"]
+                te = se["topics"].setdefault(t, {"correct": 0, "wrong": 0})
+                te["correct"] += v["correct"]
+                te["wrong"] += v["wrong"]
         self.save()
         return {"xp": xp + bonus_xp, "coins": coins + bonus_coins, "bonus_xp": bonus_xp, "bonus_coins": bonus_coins,
                 "stars": stars, "new_stars": new_stars, "level_ups": ups, "level": d["level"],
