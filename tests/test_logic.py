@@ -29,6 +29,8 @@ def test_no_external_image_links():
 
 
 def test_all_assets_exist_and_used_images_resolve():
+    # ติดตั้ง Streamlit จำลองก่อน import โมดูลที่อ้างอิง st เพื่อให้ทดสอบได้โดยไม่ต้องติดตั้ง Streamlit จริง
+    App()
     import xml.etree.ElementTree as ET
     sys.path.insert(0, ROOT)
     import game_engine as ge
@@ -40,7 +42,7 @@ def test_all_assets_exist_and_used_images_resolve():
             assert os.path.isfile(os.path.join(ROOT, "assets", "heroes", f"{a}{'' if s == 'normal' else '_' + s}.svg"))
     for m in ge.MONSTERS.values():
         for s in ("normal", "hurt", "ko"):
-            assert os.path.isfile(os.path.join(ROOT, "assets", "monsters", f"{m['img']}{'' if s == 'normal' else '_' + s}.svg"))
+            assert os.path.isfile(os.path.join(ROOT, "assets", "Monster", f"{m['img']}{'' if s == 'normal' else '_' + s}.svg"))
     assert os.path.isfile(os.path.join(ROOT, "assets", "map.svg"))
     assert V.img_uri("map.svg").startswith("data:image/svg+xml;base64,")
 
