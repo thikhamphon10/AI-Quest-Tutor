@@ -9,7 +9,7 @@ import ai_engine
 import visuals as V
 from ai_engine import generate_questions_from_text
 from game_engine import AVATAR_ORDER, AVATARS, LAST_STAGE, MONSTERS, WEAPONS, GameEngine, stage_status
-from games.battle import render_battle_game, start_battle
+from games.battle import render_battle_game, start_battle, available_question_count, STAGE_MODES
 from pdf_processor import extract_text_from_pdf
 
 # ตั้งค่าหน้าเว็บ Streamlit
@@ -177,14 +177,31 @@ def _stage_detail(stage_id: int):
         if st.button("📚 ไปสร้างบทเรียน", use_container_width=True, key=f"dlg_gen_{stage_id}"):
             goto("ai_generator")
         return
-    st.caption(f"ใช้ชุดข้อสอบ: {st.session_state.quiz_title or 'บทเรียนปัจจุบัน'} ({len(qs)} ข้อ)")
+    remaining = available_question_count(qs)
+    st.caption(f"ชุดข้อสอบ: {st.session_state.quiz_title or 'บทเรียนปัจจุบัน'} · เหลือ {remaining}/{len(qs)} ข้อที่ยังไม่เคยใช้")
+    if remaining <= 0:
+        st.warning("ข้อสอบชุดนี้ใช้ครบแล้ว จึงไม่สามารถเริ่มด่านด้วยข้อเก่าได้")
+        if st.button("🔄 เริ่มรอบใหม่โดยรีเซ็ตประวัติข้อสอบ", key=f"reset_run_{stage_id}", use_container_width=True):
+            st.session_state.used_question_ids = []
+            engine.save()
+            st.rerun()
+        return
+    mode_title, mode_desc = STAGE_MODES.get(stage_id, STAGE_MODES[1])
+    st.info(f"รูปแบบด่าน: {mode_title} — {mode_desc}")
+    count_options = [n for n in [5, 10, 15, 20, 30, 40, 50] if n <= remaining]
+    if remaining not in count_options:
+        count_options.append(remaining)
+    preferred = st.session_state.get("selected_question_count", 5)
+    count_index = min(range(len(count_options)), key=lambda i: abs(count_options[i] - min(preferred, remaining)))
+    question_count = st.selectbox("จำนวนข้อในด่านนี้", count_options, index=count_index, key=f"stage_count_{stage_id}")
     pick = st.radio("เลือกคู่หูของภารกิจนี้", owned_now(), index=owned_now().index(user["selected_avatar"]),
                     format_func=lambda a: AVATARS[a]["name"], horizontal=True, key=f"dlg_hero_{stage_id}")
     if pick != user["selected_avatar"]:
         engine.select_avatar(pick)
     if st.button("⚔️ เริ่มภารกิจ!", type="primary", use_container_width=True, key=f"dlg_go_{stage_id}"):
         st.session_state.selected_stage = stage_id
-        start_battle(stage_id, qs)
+        st.session_state.selected_question_count = question_count
+        start_battle(stage_id, qs, question_count)
         goto("battle")
 
 
@@ -254,7 +271,12 @@ if page == "map":
                     if stage_status(user, s)[0] and user["stage_stars"].get(str(s), 0) == 0), None)
         if st.button(f"🚀 เริ่มเกม" + (f" · ด่านที่ {nxt}" if nxt else ""), type="primary", use_container_width=True, key="start_game"):
             open_stage(nxt or 1)
-        st.caption(f"ชุดข้อสอบที่ใช้อยู่: {st.session_state.quiz_title or 'บทเรียนปัจจุบัน'} ({len(qs)} ข้อ)")
+        st.caption(f"ชุดข้อสอบ: {st.session_state.quiz_title or 'บทเรียนปัจจุบัน'} · เหลือ {available_question_count(qs)}/{len(qs)} ข้อที่ยังไม่เคยใช้")
+        if st.button("🔄 เริ่มรอบใหม่ (อนุญาตให้สุ่มข้อเดิมอีกครั้ง)", key="reset_question_history"):
+            st.session_state.used_question_ids = []
+            engine.save()
+            st.success("รีเซ็ตประวัติข้อสอบแล้ว เริ่มผจญภัยใหม่ได้เลย")
+            st.rerun()
 
     st.subheader("🗺️ ด่านผจญภัย")
     nxt_stage = next((s for s in range(1, LAST_STAGE + 1)
@@ -401,10 +423,10 @@ elif page == "question_bank":
     else:
         subject = st.selectbox("เลือกวิชา", subjects)
         filtered = [q for q in all_bank if q.get("subject") == subject]
-        topics = sorted({q.get("topic", "ทั่วไป") for q in filtered})
+        topics = sorted({q.get("subtopic") or q.get("topic", "ทั่วไป") for q in filtered})
         topic = st.selectbox("เลือกบท/หัวข้อ", ["ทุกหัวข้อ"] + topics)
         if topic != "ทุกหัวข้อ":
-            filtered = [q for q in filtered if q.get("topic") == topic]
+            filtered = [q for q in filtered if (q.get("subtopic") or q.get("topic", "ทั่วไป")) == topic]
         st.info(f"มีข้อสอบ {len(filtered)} ข้อ · ใช้งานได้โดยไม่ต้องเรียก Gemini API")
         max_q = len(filtered)
         choices = [n for n in [5, 10, 15, 20, 30, 40, 50] if n <= max_q]
@@ -414,17 +436,18 @@ elif page == "question_bank":
             choices = [1]
         count = st.selectbox("🎯 จำนวนข้อในการเล่นครั้งนี้", choices, index=min(1, len(choices)-1),
                              help="ระบบจะสุ่มข้อสอบจากหัวข้อที่เลือกใหม่ทุกครั้งที่เริ่มเล่น")
-        st.caption("คลังตัวอย่างระดับพื้นฐาน ม.6 · สุ่มคำถามใหม่ทุกครั้ง · ไม่ใช้โควตา Gemini")
-        if st.button("🎮 สุ่มข้อสอบแล้วเริ่มเล่น", type="primary", use_container_width=True, disabled=not filtered):
-            selected_questions = random.sample(filtered, k=min(count, len(filtered)))
-            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "") + f" ({len(selected_questions)} ข้อ)"
-            engine.set_quiz(title, selected_questions)
+        st.caption("คลังตัวอย่างระดับพื้นฐาน ม.6 · เลือกจำนวนข้อได้ในแต่ละด่าน · ไม่ใช้โควตา Gemini")
+        if st.button("🎮 เลือกชุดข้อสอบนี้", type="primary", use_container_width=True, disabled=not filtered):
+            title = f"คลังข้อสอบ: {subject}" + (f" · {topic}" if topic != "ทุกหัวข้อ" else "")
+            # เก็บทั้งคลังที่กรองแล้วไว้เป็น pool; จำนวนข้อเลือกแยกในแต่ละด่าน
+            engine.set_quiz(title, filtered)
+            st.session_state.selected_question_count = count
             st.session_state.pop("battle", None)
             goto("map")
         with st.expander("ดูตัวอย่างข้อสอบ"):
             for i, q in enumerate(filtered, 1):
                 st.markdown(f"**{i}. {q['question']}**")
-                st.caption(" · ".join(q.get("options", [])))
+                st.caption(f"หัวข้อ: {q.get('subtopic') or q.get('topic', 'ทั่วไป')} · " + " · ".join(q.get("options", [])))
 
 # ---------------------------------------------------------
 # PAGE 5: สมุดข้อผิดพลาด

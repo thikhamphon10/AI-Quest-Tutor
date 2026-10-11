@@ -182,10 +182,12 @@ class GameEngine:
             s.user_data = sanitize_user(data.get("user_data") if data else None)
             s.active_questions = sanitize_questions(data.get("active_questions") if data else [])
             s.quiz_title = str(data.get("quiz_title", ""))[:80] if data else ""
+            s.used_question_ids = list(data.get("used_question_ids", [])) if data and isinstance(data.get("used_question_ids", []), list) else []
         # รองรับเซฟ/Session State จากเวอร์ชันก่อนหน้า และเติมฟิลด์ใหม่โดยไม่ลบความคืบหน้าเดิม
         s.user_data = sanitize_user(s.user_data)
         s.setdefault("active_questions", [])
         s.setdefault("quiz_title", "")
+        s.setdefault("used_question_ids", [])
         s.setdefault("save_ok", True)
         # ตารางข้อมูลถูกสร้างใหม่ทุกครั้ง (ไม่เก็บ URL รูปเก่าใน session state)
         s.avatars = AVATARS
@@ -198,7 +200,7 @@ class GameEngine:
     def snapshot(self) -> dict:
         s = st.session_state
         return {"v": SAVE_VERSION, "user_data": s.user_data, "active_questions": s.active_questions,
-                "quiz_title": s.quiz_title}
+                "quiz_title": s.quiz_title, "used_question_ids": s.used_question_ids}
 
     def save(self):
         st.session_state.save_ok = storage.save(st.session_state.player_id, self.snapshot())
@@ -211,12 +213,16 @@ class GameEngine:
         s.user_data = sanitize_user(raw.get("user_data"))
         s.active_questions = sanitize_questions(raw.get("active_questions"))
         s.quiz_title = str(raw.get("quiz_title", ""))[:80]
+        used = raw.get("used_question_ids", [])
+        s.used_question_ids = list(dict.fromkeys(str(x) for x in used if isinstance(x, str))) if isinstance(used, list) else []
         self.save()
         return True
 
     def set_quiz(self, title: str, questions: list):
         st.session_state.active_questions = questions
         st.session_state.quiz_title = title
+        # เลือกชุดข้อสอบใหม่ = เริ่มรอบผจญภัยใหม่สำหรับชุดนี้
+        st.session_state.used_question_ids = []
         self.save()
 
     # ---- รางวัล / ปลดล็อก
